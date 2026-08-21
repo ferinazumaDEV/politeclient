@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "politeclient"
+version = "0.1.0"
+description = "A polite, bulletproof HTTP client: retries with backoff+jitter, Retry-After, a per-host rate-limit governor, disk cache, pagination and structured logging."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Fernando", email = "ferinazuma@users.noreply.github.com" }]
+keywords = ["http", "requests", "retry", "backoff", "rate-limit", "api", "client", "scraping", "pagination"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "requests>=2.28,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4,<9",
+]
+
+[project.urls]
+Homepage = "https://github.com/ferinazuma/politeclient"
+Repository = "https://github.com/ferinazuma/politeclient"
+Issues = "https://github.com/ferinazuma/politeclient/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/politeclient"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
