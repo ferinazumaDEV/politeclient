@@ -177,6 +177,18 @@ python examples/demo.py    # the tour above
 
 The test suite spins up a small programmable HTTP server (`tests/conftest.py`) and scripts exact failure sequences — three 429s then a 200, a 500 storm, a `Retry-After` header, paginated datasets — so retries, backoff, rate limiting and caching are verified against real sockets, deterministically and without touching the network.
 
+## Part of the ferinazumaDEV ecosystem
+
+politeclient is one of a family of small, focused building blocks I maintain for Python developers. Its good-citizen HTTP behaviour — honest `User-Agent`s, backoff and per-host rate-limiting — is also the baseline hygiene expected of well-behaved crawlers and AI bots, which is where it brushes lightly against technical GEO (generative engine optimization).
+
+- [The GEO Handbook](https://github.com/ferinazumaDEV/generative-engine-optimization-handbook) — the open reference on getting content cited by AI answer engines (ChatGPT, Perplexity, Google AI Overviews, Gemini, Copilot).
+- [webhook-replay](https://github.com/ferinazumaDEV/webhook-replay) — capture a webhook once, then replay it at your local app as many times as you need; the other half of the "HTTP that behaves" toolkit.
+- [structllm](https://github.com/ferinazumaDEV/structllm) — reliable structured output from any LLM: schema-validated JSON with tolerant repair and retries.
+- [scaffld](https://github.com/ferinazumaDEV/scaffld) — scaffold fully-wired Python projects (tests, CI, pre-commit, license) from templates, with a TUI.
+- Hub & writing: [zentimes.es](https://zentimes.es).
+
+By [ferinazumaDEV](https://github.com/ferinazumaDEV).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
