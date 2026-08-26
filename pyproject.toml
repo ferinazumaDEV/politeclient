@@ -9,7 +9,7 @@ description = "A polite, bulletproof HTTP client: retries with backoff+jitter, R
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Fernando", email = "ferinazuma@users.noreply.github.com" }]
+authors = [{ name = "Fernando", email = "ferinazumaDEV@users.noreply.github.com" }]
 keywords = ["http", "requests", "retry", "backoff", "rate-limit", "api", "client", "scraping", "pagination"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -34,9 +34,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ferinazuma/politeclient"
-Repository = "https://github.com/ferinazuma/politeclient"
-Issues = "https://github.com/ferinazuma/politeclient/issues"
+Homepage = "https://github.com/ferinazumaDEV/politeclient"
+Repository = "https://github.com/ferinazumaDEV/politeclient"
+Issues = "https://github.com/ferinazumaDEV/politeclient/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/politeclient"]

@@ -44,7 +44,7 @@ import logging
 Timeout = Union[float, Tuple[float, float]]
 
 DEFAULT_USER_AGENT = (
-    f"politeclient/{__version__} (+https://github.com/ferinazuma/politeclient)"
+    f"politeclient/{__version__} (+https://github.com/ferinazumaDEV/politeclient)"
 )
 
 # Transport-level failures that are worth retrying (connection reset, timeout…).

@@ -195,4 +195,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Built by Fernando ([@ferinazuma](https://github.com/ferinazuma)) — available for custom automation, scraping & bot work.*
+*Built by Fernando ([@ferinazumaDEV](https://github.com/ferinazumaDEV)).*
