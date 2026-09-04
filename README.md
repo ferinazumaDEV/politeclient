@@ -33,7 +33,7 @@ Almost every "quick script that talks to an API" grows the same crufty appendage
 ## Features
 
 - **Retries done right** — exponential backoff with **full jitter** (the [AWS-recommended](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) anti-thundering-herd strategy), only for idempotent methods by default, capped and configurable.
-- **`Retry-After` aware** — when a server tells you when to come back (seconds *or* an HTTP date), politeclient listens instead of guessing.
+- **`Retry-After` aware** — when a server tells you when to come back (seconds *or* an HTTP date), politeclient listens instead of guessing (the wait is clamped to `max_backoff`, 60 s by default).
 - **Per-host rate-limit governor** — a thread-safe token bucket per host, so a slow, rate-limited API never starves a fast one. Supports sustained rate + bursts.
 - **Honest default `User-Agent`** — sends an identifying UA instead of `python-requests/x.y.z`, the single most common cause of surprise `403`s. Override it with one kwarg.
 - **Optional disk cache for GETs** — content-addressed, TTL'd, atomic writes. Iterate on a scraper without hammering the API every run. **Authenticated requests are not cached** unless you ask for it explicitly. It stores an allowlist of response headers only, skips `no-store` and `Vary` responses, and lets the server's `max-age`/`Expires` shorten the TTL — see [Cache limits](#cache-limits).
@@ -41,7 +41,7 @@ Almost every "quick script that talks to an API" grows the same crufty appendage
 - **Sane timeouts** — a request with no timeout can hang forever; politeclient defaults to `(5s connect, 30s read)`.
 - **Structured logging** — every request, retry, wait and cache hit as a greppable `key=value` line, or newline-delimited JSON (`POLITECLIENT_LOG=json`).
 - **Clean API** — context manager, verb shortcuts, and a `@polite` decorator.
-- **Typed & tested** — full type hints, zero dependencies beyond `requests`, 58 tests against a local mock server.
+- **Typed & tested** — full type hints, zero dependencies beyond `requests`, 92 tests against a local mock server.
 
 ## Install
 
@@ -208,7 +208,7 @@ Each `request()` runs through the same pipeline:
 
 1. **Cache lookup** (GET only) — a content-addressed key over `method + url + sorted(params)`; a fresh hit short-circuits the whole thing and returns a response with `from_cache is True`. "Fresh" is the shorter of your TTL and the freshness the server declared.
 2. **Rate-limit gate** — the request acquires a token from the host's bucket, blocking just long enough if the bucket is empty. Buckets refill lazily (no background threads): each acquire computes how many tokens *would* have dripped in since the last call.
-3. **Send + evaluate** — on a retryable status (`429`, `5xx`) or a transient transport error (connection reset, timeout), it computes the next delay. `Retry-After` wins when present and valid; otherwise it's `backoff_factor · 2ⁿ` capped at `max_backoff`, then **full jitter** picks a random point in `[0, that]`.
+3. **Send + evaluate** — on a retryable status (`429`, `5xx`) or a transient transport error (connection reset, timeout), it computes the next delay. `Retry-After` wins when present and valid (clamped to `max_backoff`, 60 s by default — raise it if your API asks for longer waits); otherwise it's `backoff_factor · 2ⁿ` capped at `max_backoff`, then **full jitter** picks a random point in `[0, that]`.
 4. **Retry or return** — non-idempotent methods (`POST`) aren't retried by default, because retrying them can duplicate work. Once the budget is spent, an HTTP failure is returned as-is (so you can `raise_for_status()`), while a transport failure raises `RetryBudgetExceeded`.
 5. **Store** — a successful GET is written to the cache atomically (temp file + `os.replace`), keeping only allowlisted headers and skipping responses marked `no-store` or `Vary` ([Cache limits](#cache-limits)).
 
@@ -218,13 +218,13 @@ The token bucket, retry policy, cache and pagination are each independent, impor
 
 ```bash
 pip install -e ".[dev]"
-pytest                     # 58 tests, all offline
+pytest                     # 92 tests, all offline
 python examples/demo.py    # the tour above
 ```
 
 The test suite spins up a small programmable HTTP server (`tests/conftest.py`) and scripts exact failure sequences — three 429s then a 200, a 500 storm, a `Retry-After` header, paginated datasets — so retries, backoff, rate limiting and caching are verified against real sockets, deterministically and without touching the network.
 
-## Part of the ferinazumaDEV ecosystem
+## Part of a family of small tools
 
 politeclient is one of a family of small, focused building blocks I maintain for Python developers. Its good-citizen HTTP behaviour — honest `User-Agent`s, backoff and per-host rate-limiting — is also the baseline hygiene expected of well-behaved crawlers and AI bots, which is where it brushes lightly against technical GEO (generative engine optimization).
 
@@ -242,4 +242,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Built by Fernando ([@ferinazumaDEV](https://github.com/ferinazumaDEV)).*
+*Built by Fernando Aporta Franco ([@ferinazumaDEV](https://github.com/ferinazumaDEV)).*
