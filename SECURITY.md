@@ -27,7 +27,7 @@ When it is enabled:
 - Responses marked `Cache-Control: no-store`, and responses carrying a non-empty `Vary`, are not stored at all.
 - File names are hashes, but the **directory listing still reveals how many entries exist**, and any body you fetch is readable by anyone who can read the directory.
 
-**You choose the directory, so you own its permissions.** politeclient creates it with your process's default umask and does not change it. If the responses you cache are sensitive, put the cache somewhere only your user can read (for example `chmod 700` on the directory), or leave the cache off. `DiskCache.clear()` deletes every entry when you are done.
+**You choose the directory, so you own its permissions.** politeclient creates it with your process's default umask and does not change it. If the responses you cache are sensitive, put the cache somewhere only your user can read (for example `chmod 700` on the directory), or leave the cache off. `DiskCache.clear()` deletes every entry when you are done — only files named `<sha256>.json`, the shape every entry has, so anything else you keep in that directory is left alone.
 
 ## Other things worth knowing
 

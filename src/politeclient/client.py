@@ -281,6 +281,7 @@ class PoliteClient:
                 raise RetryBudgetExceeded(
                     f"{method} {full_url} failed after {attempt + 1} attempt(s): {exc}",
                     attempts=attempt + 1,
+                    last_status=last_status,
                     last_exception=exc,
                 ) from exc
 

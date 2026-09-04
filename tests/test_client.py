@@ -117,6 +117,38 @@ def test_transport_error_raises_retry_budget_exceeded():
 
     assert excinfo.value.attempts == 2  # initial + 1 retry
     assert len(sleeps.sleeps) == 1
+    # Every attempt died at the transport level: no HTTP status was ever seen.
+    assert excinfo.value.last_status is None
+    assert isinstance(excinfo.value.last_exception, requests.ConnectionError)
+
+
+def test_retry_budget_exceeded_reports_the_last_status_seen(monkeypatch):
+    # A 503 followed by a connection reset: the exception must carry the 503,
+    # as its docstring promises, not silently drop it.
+    class _Unavailable:
+        status_code = 503
+        headers = {}
+
+        def close(self):
+            return None
+
+    outcomes = [_Unavailable(), requests.ConnectionError("reset by peer")]
+
+    def fake_request(method, url, **kwargs):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    policy = RetryPolicy(max_retries=1, backoff_factor=0.0)
+    with PoliteClient(base_url="http://127.0.0.1:1", retry=policy, sleep=lambda s: None) as client:
+        monkeypatch.setattr(client._session, "request", fake_request)
+        with pytest.raises(RetryBudgetExceeded) as excinfo:
+            client.get("/anything")
+
+    assert excinfo.value.attempts == 2
+    assert excinfo.value.last_status == 503
+    assert isinstance(excinfo.value.last_exception, requests.ConnectionError)
 
 
 # --------------------------------------------------------------------------- #

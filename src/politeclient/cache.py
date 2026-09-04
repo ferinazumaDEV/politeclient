@@ -27,6 +27,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass
@@ -175,6 +176,11 @@ def is_storable(headers: Mapping[str, str]) -> Optional[str]:
     if vary is not None and vary.strip():
         return "vary"
     return None
+
+
+#: Every entry file is named ``<sha256 hex digest>.json`` (see
+#: :meth:`DiskCache.make_key`); :meth:`DiskCache.clear` only removes those.
+_ENTRY_STEM = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass
@@ -333,10 +339,15 @@ class DiskCache:
         return True
 
     def clear(self) -> int:
-        """Delete every cache entry. Returns the number removed."""
+        """Delete every cache entry. Returns the number removed.
+
+        Only files named like an entry — ``<64 hex chars>.json``, the shape
+        :meth:`make_key` always produces — are touched. Anything else that
+        happens to live in the directory is left alone.
+        """
         removed = 0
         for path in self.directory.glob("*.json"):
-            if self._safe_unlink(path):
+            if _ENTRY_STEM.fullmatch(path.stem) and self._safe_unlink(path):
                 removed += 1
         return removed
 

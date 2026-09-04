@@ -59,6 +59,20 @@ def test_clear(tmp_path):
     assert cache.get(DiskCache.make_key("GET", "https://x/0")) is None
 
 
+def test_clear_leaves_unrelated_files_alone(tmp_path):
+    # Entries are always <64 hex>.json; other files sharing the directory —
+    # even other JSON — are not the cache's to delete.
+    cache = DiskCache(tmp_path)
+    (tmp_path / "my-unrelated-config.json").write_text('{"keep": true}', encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("keep", encoding="utf-8")
+    for i in range(2):
+        cache.set(DiskCache.make_key("GET", f"https://x/{i}"),
+                  status_code=200, headers={}, content=b"x", url="")
+    assert cache.clear() == 2
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["my-unrelated-config.json", "notes.txt"]
+    assert (tmp_path / "my-unrelated-config.json").read_text(encoding="utf-8") == '{"keep": true}'
+
+
 def test_corrupt_entry_is_a_miss(tmp_path):
     cache = DiskCache(tmp_path)
     key = DiskCache.make_key("GET", "https://x/y")
