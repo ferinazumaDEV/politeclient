@@ -73,6 +73,17 @@ print(resp.json()["stargazers_count"])
 client.close()
 ```
 
+`base_url` is joined to the path you pass with `urllib.parse.urljoin`, so the usual RFC 3986 rules apply. A bare host works either way, but a base that carries a path prefix must end with `/` and the paths must be relative:
+
+```python
+client = PoliteClient(base_url="https://api.example.com/v1/")
+client.get("users")     # -> https://api.example.com/v1/users
+client.get("/users")    # -> https://api.example.com/users  (a leading slash resets to the host root)
+# base_url="https://api.example.com/v1" (no trailing slash) drops the /v1 segment the same way.
+```
+
+An absolute URL passed to a verb is used as-is.
+
 Or as a context manager (recommended):
 
 ```python

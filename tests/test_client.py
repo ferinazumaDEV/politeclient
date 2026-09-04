@@ -152,6 +152,62 @@ def test_retry_budget_exceeded_reports_the_last_status_seen(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# base_url join semantics (urljoin, as documented)
+# --------------------------------------------------------------------------- #
+class _Sent:
+    """Minimal stand-in for a requests.Response on the happy path."""
+
+    status_code = 200
+    headers: dict = {}
+
+    def close(self) -> None:
+        return None
+
+
+def _capture_url(client, monkeypatch):
+    """Replace the session's request() so the test sees the URL that would be sent."""
+    seen = []
+
+    def fake_request(method, url, **kwargs):
+        seen.append(url)
+        return _Sent()
+
+    monkeypatch.setattr(client._session, "request", fake_request)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("base_url", "path", "expected"),
+    [
+        # A base with a path prefix keeps it only for a trailing-slash base
+        # and a relative path — the documented shape.
+        ("https://api.example.com/v1/", "users", "https://api.example.com/v1/users"),
+        # The two traps the docs warn about: a leading slash resets to the
+        # host root, and a base without the trailing slash drops its last
+        # segment. Pinned so a change here is a deliberate API decision.
+        ("https://api.example.com/v1/", "/users", "https://api.example.com/users"),
+        ("https://api.example.com/v1", "users", "https://api.example.com/users"),
+        # A bare host works either way.
+        ("https://api.example.com", "/users", "https://api.example.com/users"),
+        ("https://api.example.com", "users", "https://api.example.com/users"),
+    ],
+    ids=["prefix-kept", "leading-slash-resets", "no-trailing-slash-drops", "bare-host-abs", "bare-host-rel"],
+)
+def test_base_url_is_joined_with_urljoin(base_url, path, expected, monkeypatch):
+    with PoliteClient(base_url=base_url) as client:
+        seen = _capture_url(client, monkeypatch)
+        client.get(path)
+    assert seen == [expected]
+
+
+def test_absolute_url_ignores_base_url(monkeypatch):
+    with PoliteClient(base_url="https://api.example.com/v1/") as client:
+        seen = _capture_url(client, monkeypatch)
+        client.get("https://other.example/status")
+    assert seen == ["https://other.example/status"]
+
+
+# --------------------------------------------------------------------------- #
 # Rate limiting
 # --------------------------------------------------------------------------- #
 def test_rate_limit_governor_throttles(server):

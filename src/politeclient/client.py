@@ -60,7 +60,14 @@ class PoliteClient:
     """A polite, resilient HTTP client.
 
     Args:
-        base_url: Optional base joined to relative paths passed to the verbs.
+        base_url: Optional base joined to the paths passed to the verbs with
+            :func:`urllib.parse.urljoin`, so RFC 3986 rules apply. A bare host
+            works either way, but a base that carries a path prefix must end
+            with ``/`` and the paths must be relative:
+            ``base_url="https://api.example.com/v1/"`` + ``get("users")``
+            requests ``/v1/users``, whereas a leading slash (``"/users"``) or a
+            base without the trailing slash resets to the host root and
+            silently drops ``/v1``. An absolute URL is used as-is.
         rate_limit: A :class:`RateLimit` applied *per host*. ``None`` disables
             rate limiting.
         retry: A :class:`RetryPolicy`. Defaults to a sensible policy.
