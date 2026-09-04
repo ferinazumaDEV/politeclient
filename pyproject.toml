@@ -9,7 +9,7 @@ description = "A careful, well-behaved HTTP client: retries with backoff+jitter,
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Fernando", email = "ferinazumaDEV@users.noreply.github.com" }]
+authors = [{ name = "Fernando Aporta Franco", email = "ferinazumaDEV@users.noreply.github.com" }]
 keywords = ["http", "requests", "retry", "backoff", "rate-limit", "api", "client", "scraping", "pagination"]
 classifiers = [
     "Development Status :: 4 - Beta",
