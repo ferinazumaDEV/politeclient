@@ -1,4 +1,4 @@
-"""The :class:`PoliteClient` — a courteous, bulletproof HTTP client.
+"""The :class:`PoliteClient` — a careful, well-behaved HTTP client.
 
 It wraps a :class:`requests.Session` and adds the things people forget:
 
@@ -64,8 +64,11 @@ class PoliteClient:
             rate limiting.
         retry: A :class:`RetryPolicy`. Defaults to a sensible policy.
         cache: A cache directory (str/Path) or a :class:`DiskCache`. ``None``
-            disables caching. Only successful GETs are cached.
-        cache_ttl: TTL in seconds when ``cache`` is given as a path.
+            disables caching (the default). Only successful GETs are cached, and
+            never one marked ``no-store`` or carrying a ``Vary`` — see
+            :mod:`politeclient.cache` for what is stored and what is refused.
+        cache_ttl: TTL in seconds when ``cache`` is given as a path. The server's
+            own ``max-age``/``Expires`` can only shorten it.
         user_agent: Overrides the default identifying User-Agent.
         headers: Extra default headers merged into every request.
         timeout: Default ``(connect, read)`` timeout, or a single float.
@@ -291,13 +294,23 @@ class PoliteClient:
 
             if cache_enabled and 200 <= response.status_code < 300:
                 assert self.cache is not None and cache_key is not None
-                self.cache.set(
+                # The cache sees the full headers so it can read Cache-Control
+                # and Vary, but only persists its own allowlist of them.
+                stored = self.cache.set(
                     cache_key,
                     status_code=response.status_code,
                     headers=dict(response.headers),
                     content=response.content,
                     url=response.url,
                 )
+                if not stored:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "cache_skip",
+                        method=method,
+                        url=full_url,
+                    )
             setattr(response, "from_cache", False)
             return response
 

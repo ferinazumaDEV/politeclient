@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "politeclient"
 version = "0.1.0"
-description = "A polite, bulletproof HTTP client: retries with backoff+jitter, Retry-After, a per-host rate-limit governor, disk cache, pagination and structured logging."
+description = "A careful, well-behaved HTTP client: retries with backoff+jitter, Retry-After, a per-host rate-limit governor, disk cache, pagination and structured logging."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

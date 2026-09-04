@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
-**A polite, bulletproof HTTP client for Python — every good-citizen behaviour you keep re-writing for each new API, in one small wrapper around `requests`.**
+**A careful, well-behaved HTTP client for Python — every good-citizen behaviour you keep re-writing for each new API, in one small wrapper around `requests`.**
 
 Retries with exponential backoff **and jitter**, `Retry-After` support, a per-host rate-limit governor, an honest default `User-Agent`, an optional on-disk GET cache, cursor & offset pagination, sane timeouts and structured logging — behind a clean, pythonic API.
 
@@ -36,12 +36,12 @@ Almost every "quick script that talks to an API" grows the same crufty appendage
 - **`Retry-After` aware** — when a server tells you when to come back (seconds *or* an HTTP date), politeclient listens instead of guessing.
 - **Per-host rate-limit governor** — a thread-safe token bucket per host, so a slow, rate-limited API never starves a fast one. Supports sustained rate + bursts.
 - **Honest default `User-Agent`** — sends an identifying UA instead of `python-requests/x.y.z`, the single most common cause of surprise `403`s. Override it with one kwarg.
-- **Optional disk cache for GETs** — content-addressed, TTL'd, atomic writes. Iterate on a scraper without hammering the API every run.
+- **Optional disk cache for GETs** — content-addressed, TTL'd, atomic writes. Iterate on a scraper without hammering the API every run. It stores an allowlist of response headers only, skips `no-store` and `Vary` responses, and lets the server's `max-age`/`Expires` shorten the TTL — see [Cache limits](#cache-limits).
 - **Pagination helpers** — lazy generators for both **cursor** and **offset/limit** APIs, with dotted-path extraction (`items_key="data.results"`).
 - **Sane timeouts** — a request with no timeout can hang forever; politeclient defaults to `(5s connect, 30s read)`.
 - **Structured logging** — every request, retry, wait and cache hit as a greppable `key=value` line, or newline-delimited JSON (`POLITECLIENT_LOG=json`).
 - **Clean API** — context manager, verb shortcuts, and a `@polite` decorator.
-- **Typed & tested** — full type hints, zero dependencies beyond `requests`, 38 tests against a local mock server.
+- **Typed & tested** — full type hints, zero dependencies beyond `requests`, 55 tests against a local mock server.
 
 ## Install
 
@@ -119,6 +119,17 @@ with PoliteClient(cache="~/.cache/myscraper", cache_ttl=3600) as client:
     fresh = client.get("/expensive", use_cache=False)   # force network
 ```
 
+### Cache limits
+
+The cache is **off by default**; it only exists if you pass `cache=`. When you do turn it on, this is exactly what it is — a small private cache for iterating on a script, not an HTTP caching implementation:
+
+- **The key is `method + URL + sorted(params)`, and nothing else.** No request headers, no cookies, no credentials go into it — which is also why a response that declares `Vary` is not cached at all: the key cannot tell one variant from another, so serving it back would risk handing you the wrong one.
+- **Entries are plain, unencrypted JSON files** (the body is base64, which is encoding, not encryption) in the directory *you* choose. You own that path and its permissions — see [SECURITY.md](SECURITY.md).
+- **Only these response headers are persisted:** `Content-Type`, `Content-Encoding`, `ETag`, `Last-Modified`, `Date`, `Vary`. Everything else — `Set-Cookie`, `Authorization`, `WWW-Authenticate` and any header nobody thought about — is dropped on the way to disk.
+- **`Cache-Control: no-store` is honoured on write**, and `no-cache` is treated as "never fresh", because this cache cannot revalidate.
+- **The server's `max-age` / `Expires` is an upper bound on your TTL.** The shorter of the two wins; `cache_ttl` can only make an entry expire *sooner* than the server said, never later.
+- **It is not RFC 9111.** No revalidation with `ETag`/`Last-Modified`, no `stale-while-revalidate`, no shared-cache semantics. If you need those, put a real caching proxy in front.
+
 ## Demo
 
 `examples/demo.py` is fully self-contained — it starts a local server that misbehaves on purpose (429s with `Retry-After`, offset pagination, a cacheable endpoint) and drives it. No network, no keys:
@@ -159,11 +170,11 @@ The structured log lines it emits along the way (here in `key=value` mode):
 
 Each `request()` runs through the same pipeline:
 
-1. **Cache lookup** (GET only) — a content-addressed key over `method + url + sorted(params)`; a fresh hit short-circuits the whole thing and returns a response with `from_cache is True`.
+1. **Cache lookup** (GET only) — a content-addressed key over `method + url + sorted(params)`; a fresh hit short-circuits the whole thing and returns a response with `from_cache is True`. "Fresh" is the shorter of your TTL and the freshness the server declared.
 2. **Rate-limit gate** — the request acquires a token from the host's bucket, blocking just long enough if the bucket is empty. Buckets refill lazily (no background threads): each acquire computes how many tokens *would* have dripped in since the last call.
 3. **Send + evaluate** — on a retryable status (`429`, `5xx`) or a transient transport error (connection reset, timeout), it computes the next delay. `Retry-After` wins when present and valid; otherwise it's `backoff_factor · 2ⁿ` capped at `max_backoff`, then **full jitter** picks a random point in `[0, that]`.
 4. **Retry or return** — non-idempotent methods (`POST`) aren't retried by default, because retrying them can duplicate work. Once the budget is spent, an HTTP failure is returned as-is (so you can `raise_for_status()`), while a transport failure raises `RetryBudgetExceeded`.
-5. **Store** — a successful GET is written to the cache atomically (temp file + `os.replace`).
+5. **Store** — a successful GET is written to the cache atomically (temp file + `os.replace`), keeping only allowlisted headers and skipping responses marked `no-store` or `Vary` ([Cache limits](#cache-limits)).
 
 The token bucket, retry policy, cache and pagination are each independent, importable pieces (`TokenBucket`, `RetryPolicy`, `DiskCache`, `paginate_cursor`), so you can reuse one without buying into the whole client.
 
@@ -171,7 +182,7 @@ The token bucket, retry policy, cache and pagination are each independent, impor
 
 ```bash
 pip install -e ".[dev]"
-pytest                     # 38 tests, all offline
+pytest                     # 55 tests, all offline
 python examples/demo.py    # the tour above
 ```
 
