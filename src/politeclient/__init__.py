@@ -1,4 +1,4 @@
-"""politeclient — a polite, bulletproof HTTP client for Python.
+"""politeclient — a polite, careful, well-behaved HTTP client for Python.
 
 A thin, well-behaved wrapper around ``requests`` that bundles everything people
 forget when calling APIs: retries with backoff + jitter, ``Retry-After``

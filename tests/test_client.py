@@ -156,6 +156,69 @@ def test_cache_can_be_bypassed_per_request(server, tmp_path):
     assert server.hit_count("/data") == 2
 
 
+def _cache_files_text(tmp_path):
+    """Every byte the cache wrote under ``tmp_path``, concatenated."""
+    return "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.json"))
+
+
+def test_cache_does_not_persist_set_cookie(server, tmp_path):
+    def handler(ctx):
+        return 200, {"Set-Cookie": "session=e2e-s3cr3t-value; Path=/"}, {"n": ctx.count}
+
+    server.route("/data", handler)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        assert client.get("/data").status_code == 200
+
+    written = _cache_files_text(tmp_path)
+    assert written  # the response *was* cached...
+    assert "e2e-s3cr3t-value" not in written  # ...without the session cookie
+    assert "set-cookie" not in written.lower()
+
+
+def test_no_store_response_is_not_cached(server, tmp_path):
+    def handler(ctx):
+        return 200, {"Cache-Control": "no-store"}, {"n": ctx.count}
+
+    server.route("/data", handler)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        first = client.get("/data")
+        second = client.get("/data")
+
+    assert list(tmp_path.glob("*.json")) == []
+    assert first.from_cache is False and second.from_cache is False
+    assert second.json() == {"n": 2}
+    assert server.hit_count("/data") == 2
+
+
+def test_response_with_vary_is_not_cached(server, tmp_path):
+    def handler(ctx):
+        return 200, {"Vary": "Accept-Encoding"}, {"n": ctx.count}
+
+    server.route("/data", handler)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        client.get("/data")
+        second = client.get("/data")
+
+    assert list(tmp_path.glob("*.json")) == []
+    assert second.from_cache is False
+    assert server.hit_count("/data") == 2
+
+
+def test_server_max_age_beats_a_longer_local_ttl(server, tmp_path):
+    def handler(ctx):
+        return 200, {"Cache-Control": "max-age=0"}, {"n": ctx.count}
+
+    server.route("/data", handler)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path, cache_ttl=3600) as client:
+        client.get("/data")
+        second = client.get("/data")
+
+    # Written to disk, but the server said it was stale on arrival.
+    assert second.from_cache is False
+    assert second.json() == {"n": 2}
+    assert server.hit_count("/data") == 2
+
+
 # --------------------------------------------------------------------------- #
 # Headers
 # --------------------------------------------------------------------------- #
