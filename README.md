@@ -214,7 +214,7 @@ politeclient is one of a family of small, focused building blocks I maintain for
 
 - [The GEO Handbook](https://github.com/ferinazumaDEV/generative-engine-optimization-handbook) — the open reference on getting content cited by AI answer engines (ChatGPT, Perplexity, Google AI Overviews, Gemini, Copilot).
 - [webhook-replay](https://github.com/ferinazumaDEV/webhook-replay) — capture a webhook once, then replay it at your local app as many times as you need; the other half of the "HTTP that behaves" toolkit.
-- [structllm](https://github.com/ferinazumaDEV/structllm) — reliable structured output from any LLM: schema-validated JSON with tolerant repair and retries.
+- [typedout](https://github.com/ferinazumaDEV/typedout) — reliable structured output from any LLM: schema-validated JSON with tolerant repair and retries.
 - [scaffld](https://github.com/ferinazumaDEV/scaffld) — scaffold fully-wired Python projects (tests, CI, pre-commit, license) from templates, with a TUI.
 - Hub & writing: [zentimes.es](https://zentimes.es).
 
