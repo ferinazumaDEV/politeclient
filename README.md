@@ -41,7 +41,7 @@ Almost every "quick script that talks to an API" grows the same crufty appendage
 - **Sane timeouts** — a request with no timeout can hang forever; politeclient defaults to `(5s connect, 30s read)`.
 - **Structured logging** — every request, retry, wait and cache hit as a greppable `key=value` line, or newline-delimited JSON (`POLITECLIENT_LOG=json`).
 - **Clean API** — context manager, verb shortcuts, and a `@polite` decorator.
-- **Typed & tested** — full type hints, zero dependencies beyond `requests`, 55 tests against a local mock server.
+- **Typed & tested** — full type hints, zero dependencies beyond `requests`, 58 tests against a local mock server.
 
 ## Install
 
@@ -182,7 +182,7 @@ The token bucket, retry policy, cache and pagination are each independent, impor
 
 ```bash
 pip install -e ".[dev]"
-pytest                     # 55 tests, all offline
+pytest                     # 58 tests, all offline
 python examples/demo.py    # the tour above
 ```
 
