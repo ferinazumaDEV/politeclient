@@ -113,17 +113,32 @@ class MockServer:
                 if method != "HEAD":
                     self.wfile.write(payload)
 
+            def _read_body(self) -> None:
+                length = int(self.headers.get("Content-Length", 0))
+                if length:
+                    self.rfile.read(length)
+
             def do_GET(self) -> None:
                 self._dispatch("GET")
 
             def do_POST(self) -> None:
-                length = int(self.headers.get("Content-Length", 0))
-                if length:
-                    self.rfile.read(length)
+                self._read_body()
                 self._dispatch("POST")
 
             def do_HEAD(self) -> None:
                 self._dispatch("HEAD")
+
+            def do_PUT(self) -> None:
+                self._read_body()
+                self._dispatch("PUT")
+
+            def do_PATCH(self) -> None:
+                self._read_body()
+                self._dispatch("PATCH")
+
+            def do_DELETE(self) -> None:
+                self._read_body()
+                self._dispatch("DELETE")
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)

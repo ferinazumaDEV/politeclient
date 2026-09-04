@@ -365,3 +365,20 @@ def test_authenticated_request_is_not_cached(tmp_path, monkeypatch):
     assert len(calls) == 2, "the second identity was served a cached response"
     assert DiskCache.make_key("GET", "https://example.test/me", None) is not None
     assert cache.get(DiskCache.make_key("GET", "https://example.test/me", None)) is None
+
+
+# --- CachedResponse: the value a cache hit is rebuilt from -------------------
+
+def test_cached_response_accessors():
+    from politeclient import CachedResponse
+
+    cached = CachedResponse(
+        status_code=200,
+        headers={"Content-Type": "application/json"},
+        content=b'{"a": 1}',
+        url="https://x/y",
+        created_at=time.time() - 5,
+    )
+    assert cached.json() == {"a": 1}
+    assert cached.text == '{"a": 1}'
+    assert 5 <= cached.age < 60

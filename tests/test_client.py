@@ -13,11 +13,15 @@ import pytest
 import requests
 
 from politeclient import (
+    DEFAULT_USER_AGENT,
     DiskCache,
     PoliteClient,
+    PoliteError,
     RateLimit,
+    RateLimitConfigError,
     RetryBudgetExceeded,
     RetryPolicy,
+    __version__,
 )
 
 
@@ -149,6 +153,54 @@ def test_retry_budget_exceeded_reports_the_last_status_seen(monkeypatch):
     assert excinfo.value.attempts == 2
     assert excinfo.value.last_status == 503
     assert isinstance(excinfo.value.last_exception, requests.ConnectionError)
+
+
+def test_polite_error_is_the_documented_catch_all():
+    assert issubclass(RetryBudgetExceeded, PoliteError)
+    assert issubclass(RateLimitConfigError, PoliteError)
+    with pytest.raises(PoliteError):
+        RateLimit(rate=0)
+    policy = RetryPolicy(max_retries=0)
+    with PoliteClient(base_url="http://127.0.0.1:1", retry=policy, timeout=1.0) as client:
+        with pytest.raises(PoliteError) as excinfo:
+            client.get("/anything")
+    assert isinstance(excinfo.value, RetryBudgetExceeded)
+
+
+# --------------------------------------------------------------------------- #
+# Verb shortcuts and their retry eligibility
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("verb", "retried"),
+    [("head", True), ("put", True), ("patch", False), ("delete", True)],
+)
+def test_verb_shortcuts_send_the_method_and_follow_retry_eligibility(server, verb, retried):
+    # Idempotent methods (HEAD, PUT, DELETE) are retried on a 503; PATCH is not.
+    def handler(ctx):
+        ctx.state.setdefault("methods", []).append(ctx.method)
+        if ctx.count <= 1:
+            return 503, {}, "warming up"
+        return 200, {}, {"ok": True}
+
+    server.route("/thing", handler)
+    policy = RetryPolicy(max_retries=2, backoff_factor=0.0)
+    with PoliteClient(base_url=server.base_url, retry=policy, sleep=lambda s: None) as client:
+        if verb == "head":
+            resp = client.head("/thing")
+        elif verb == "put":
+            resp = client.put("/thing", data=b"replacement")
+        elif verb == "patch":
+            resp = client.patch("/thing", json={"field": "value"})
+        else:
+            resp = client.delete("/thing")
+
+    assert set(server.state["methods"]) == {verb.upper()}
+    if retried:
+        assert resp.status_code == 200
+        assert server.hit_count("/thing") == 2
+    else:
+        assert resp.status_code == 503
+        assert server.hit_count("/thing") == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -438,6 +490,31 @@ def test_custom_user_agent_is_sent(server):
         assert client.get("/echo").json()["ua"] == "MyBot/9.9"
 
 
+def test_default_user_agent_is_exactly_the_exported_constant(server):
+    server.route("/echo", lambda ctx: (200, {}, {"ua": ctx.headers.get("user-agent", "")}))
+    with PoliteClient(base_url=server.base_url) as client:
+        assert client.get("/echo").json()["ua"] == DEFAULT_USER_AGENT
+    assert DEFAULT_USER_AGENT.startswith(f"politeclient/{__version__} ")
+
+
+def test_cache_hit_rebuilds_a_response_from_the_cached_entry(server, tmp_path):
+    server.route(
+        "/data",
+        lambda ctx: (200, {"Content-Type": "application/json; charset=utf-8", "ETag": '"v1"'},
+                     {"n": ctx.count}),
+    )
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        client.get("/data")
+        hit = client.get("/data")
+
+    assert hit.from_cache is True
+    assert hit.status_code == 200
+    assert hit.headers["ETag"] == '"v1"'
+    assert hit.encoding == "utf-8"
+    assert hit.url == server.url("/data")
+    assert hit.json() == {"n": 1}
+
+
 # --------------------------------------------------------------------------- #
 # Pagination
 # --------------------------------------------------------------------------- #
@@ -471,3 +548,46 @@ def test_cursor_pagination_end_to_end(server):
         got = list(client.paginate_cursor("/feed", items_key="data", cursor_key="next"))
 
     assert got == [1, 2, 3, 4, 5]
+
+
+def test_paginate_offset_knobs_reach_the_query_string(server):
+    def handler(ctx):
+        ctx.state.setdefault("queries", []).append(dict(ctx.query))
+        start, size = int(ctx.query["from"]), int(ctx.query["size"])
+        return 200, {}, {"rows": list(range(start, min(start + size, 7)))}
+
+    server.route("/rows", handler)
+    with PoliteClient(base_url=server.base_url) as client:
+        got = list(client.paginate_offset(
+            "/rows", items_key="rows", limit=3,
+            limit_param="size", offset_param="from", start_offset=1,
+            params={"q": "x"},
+        ))
+
+    assert got == [1, 2, 3, 4, 5, 6]
+    assert server.state["queries"] == [
+        {"q": "x", "size": "3", "from": "1"},
+        {"q": "x", "size": "3", "from": "4"},
+        {"q": "x", "size": "3", "from": "7"},  # the empty page that ends it
+    ]
+
+
+def test_paginate_cursor_knobs_reach_the_query_string(server):
+    pages = {"p2": {"data": [1, 2], "next": "p3"}, "p3": {"data": [3], "next": None}}
+
+    def handler(ctx):
+        ctx.state.setdefault("queries", []).append(dict(ctx.query))
+        return 200, {}, pages[ctx.query["page_token"]]
+
+    server.route("/feed", handler)
+    with PoliteClient(base_url=server.base_url) as client:
+        got = list(client.paginate_cursor(
+            "/feed", items_key="data", cursor_key="next",
+            cursor_param="page_token", start_cursor="p2", params={"q": "x"},
+        ))
+
+    assert got == [1, 2, 3]
+    assert server.state["queries"] == [
+        {"q": "x", "page_token": "p2"},
+        {"q": "x", "page_token": "p3"},
+    ]
