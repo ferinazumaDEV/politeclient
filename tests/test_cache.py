@@ -5,6 +5,7 @@ from __future__ import annotations
 import email.utils
 import json
 import time
+from unittest import mock
 
 from politeclient import DiskCache
 from politeclient.cache import server_freshness
@@ -259,3 +260,39 @@ def test_server_max_age_bounds_an_unlimited_local_ttl(tmp_path):
     cache.set(key, status_code=200, headers={"Cache-Control": "max-age=0"},
               content=b"hi", url="https://x/y")
     assert cache.get(key) is None
+
+
+# A TTL of zero is only reachable now that the server's freshness bounds the
+# local one, and "fresh for zero seconds" must never produce a hit. The clock is
+# frozen so the assertion does not depend on the platform's timer resolution:
+# on Linux time.time() advances between the write and the read, but on a coarse
+# clock (~15.6 ms on Windows) both land in the same tick.
+
+
+def test_zero_ttl_misses_within_a_single_clock_tick(tmp_path):
+    cache = DiskCache(tmp_path, ttl=3600)
+    key = DiskCache.make_key("GET", "https://x/y")
+    with mock.patch("politeclient.cache.time.time", return_value=1000.0):
+        cache.set(key, status_code=200, headers={"Cache-Control": "max-age=0"},
+                  content=b"hi", url="https://x/y")
+        assert cache.get(key) is None
+
+
+def test_no_cache_misses_within_a_single_clock_tick(tmp_path):
+    cache = DiskCache(tmp_path, ttl=3600)
+    key = DiskCache.make_key("GET", "https://x/y")
+    with mock.patch("politeclient.cache.time.time", return_value=1000.0):
+        cache.set(key, status_code=200, headers={"Cache-Control": "no-cache"},
+                  content=b"hi", url="https://x/y")
+        assert cache.get(key) is None
+
+
+def test_frozen_clock_still_serves_a_response_the_server_called_fresh(tmp_path):
+    # Control for the two tests above: the miss comes from the zero TTL, not
+    # from freezing the clock.
+    cache = DiskCache(tmp_path, ttl=3600)
+    key = DiskCache.make_key("GET", "https://x/y")
+    with mock.patch("politeclient.cache.time.time", return_value=1000.0):
+        cache.set(key, status_code=200, headers={"Cache-Control": "max-age=5"},
+                  content=b"hi", url="https://x/y")
+        assert cache.get(key) is not None

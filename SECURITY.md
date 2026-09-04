@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-politeclient is a young project: only the latest released version (`0.1.x`) gets fixes. There is no long-term support branch.
+politeclient has no published release yet: `0.1.0` is the version declared in `pyproject.toml`, and the README notes that PyPI is still pending. Fixes land on `main`, and there is no long-term support branch.
 
 ## Reporting a problem
 

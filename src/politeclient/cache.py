@@ -253,7 +253,12 @@ class DiskCache:
             )
 
         created_at = float(data.get("created_at", 0.0))
-        if effective_ttl is not None and (time.time() - created_at) > effective_ttl:
+        # ``>=`` rather than ``>``: an entry is fresh while its age is *below*
+        # the TTL, so a TTL of zero (``max-age=0``, ``no-cache``, a past or
+        # invalid ``Expires``) always misses — even when the read lands in the
+        # same clock tick as the write, which is reachable on platforms whose
+        # ``time.time()`` is coarse.
+        if effective_ttl is not None and (time.time() - created_at) >= effective_ttl:
             self._safe_unlink(path)
             return None
 
