@@ -30,6 +30,7 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 from requests.structures import CaseInsensitiveDict
+from requests.utils import get_netrc_auth
 
 from . import __version__
 from .cache import carries_credentials, CachedResponse, DiskCache
@@ -195,9 +196,27 @@ class PoliteClient:
         # one entry. Skip the cache unless the caller opts in explicitly with
         # ``use_cache=True``, which is a deliberate "I know this response is the
         # same for everyone" statement.
-        _authenticated = carries_credentials(kwargs.get("headers")) or carries_credentials(
-            self._session.headers
-        )
+        #
+        # Credentials reach ``requests`` by several routes, not only a literal
+        # ``Authorization``/``Cookie`` header: a per-request ``auth=`` or
+        # ``cookies=``, ``session.auth``, a cookie jar filled by an earlier
+        # ``Set-Cookie`` (a login flow), or ``~/.netrc`` — which ``requests``
+        # applies on its own whenever ``trust_env`` is on. Every route is checked
+        # and the check fails closed: *any* cookie in the jar, for any domain,
+        # disables caching by default. The computation only runs when it can
+        # change the outcome, so ``~/.netrc`` is not parsed for a POST or when
+        # the cache is off.
+        _authenticated = False
+        if self.cache is not None and method == "GET" and use_cache is None:
+            _authenticated = (
+                carries_credentials(kwargs.get("headers"))
+                or carries_credentials(self._session.headers)
+                or kwargs.get("auth") is not None
+                or self._session.auth is not None
+                or bool(kwargs.get("cookies"))
+                or len(self._session.cookies) > 0
+                or bool(self._session.trust_env and get_netrc_auth(full_url))
+            )
         cache_enabled = (
             self.cache is not None
             and method == "GET"

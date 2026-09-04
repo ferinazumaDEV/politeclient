@@ -7,9 +7,13 @@ offline.
 
 from __future__ import annotations
 
+import stat
+
 import pytest
+import requests
 
 from politeclient import (
+    DiskCache,
     PoliteClient,
     RateLimit,
     RetryBudgetExceeded,
@@ -217,6 +221,112 @@ def test_server_max_age_beats_a_longer_local_ttl(server, tmp_path):
     assert second.from_cache is False
     assert second.json() == {"n": 2}
     assert server.hit_count("/data") == 2
+
+
+# --------------------------------------------------------------------------- #
+# Credentials must never share a cache entry — one test per route they take
+# --------------------------------------------------------------------------- #
+# The cache key is method + URL + params, so a personalised response is
+# unshareable by construction. ``requests`` accepts credentials several ways,
+# not only as a literal ``Authorization``/``Cookie`` header; every route must
+# skip the cache, and a second, credential-less client pointed at the same
+# directory must never be served the personalised body.
+
+
+def _whoami(ctx):
+    """Personalise the body on whatever credential the server sees."""
+    if ctx.headers.get("authorization"):
+        return 200, {}, {"me": "auth:" + ctx.headers["authorization"]}
+    if ctx.headers.get("cookie"):
+        return 200, {}, {"me": "cookie:" + ctx.headers["cookie"]}
+    return 200, {}, {"me": "anonymous"}
+
+
+def _assert_personalised_and_unshared(server, tmp_path, personalised):
+    """``personalised`` came from the network, was not written, and cannot leak."""
+    assert personalised.from_cache is False
+    assert personalised.json()["me"] != "anonymous"
+    me_key = DiskCache.make_key("GET", server.url("/me"), None)
+    assert not (tmp_path / f"{me_key}.json").exists()
+    # A second client with no credentials and the same cache directory.
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as anonymous:
+        second = anonymous.get("/me")
+    assert second.from_cache is False
+    assert second.json() == {"me": "anonymous"}
+
+
+def test_auth_kwarg_is_not_cached(server, tmp_path):
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        personalised = client.get("/me", auth=("alice", "pw"))
+    assert list(tmp_path.glob("*.json")) == []
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_cookies_kwarg_is_not_cached(server, tmp_path):
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        personalised = client.get("/me", cookies={"session": "USER_B_SECRET"})
+    assert list(tmp_path.glob("*.json")) == []
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_session_auth_is_not_cached(server, tmp_path):
+    server.route("/me", _whoami)
+    session = requests.Session()
+    session.auth = ("carol", "pw")
+    with PoliteClient(base_url=server.base_url, cache=tmp_path, session=session) as client:
+        personalised = client.get("/me")
+    assert list(tmp_path.glob("*.json")) == []
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_session_cookie_jar_from_login_is_not_cached(server, tmp_path):
+    # A login flow: the server sets a cookie, the session jar keeps it, and the
+    # next GET goes out with ``Cookie:`` — without anyone passing headers=.
+    server.route("/login", lambda ctx: (200, {"Set-Cookie": "session=USER_A_SECRET; Path=/"},
+                                        {"ok": True}))
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        client.get("/login")
+        personalised = client.get("/me")
+    # The anonymous /login response is legitimately cached; /me must not be.
+    login_key = DiskCache.make_key("GET", server.url("/login"), None)
+    assert [p.name for p in tmp_path.glob("*.json")] == [f"{login_key}.json"]
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_netrc_credentials_are_not_cached(server, tmp_path, monkeypatch):
+    # ``requests`` adds Authorization from ~/.netrc on its own when trust_env is
+    # on (the default) — the caller never sees a credential in their own code.
+    home = tmp_path / "home"
+    home.mkdir()
+    netrc = home / ".netrc"
+    netrc.write_text("machine 127.0.0.1 login dave password pw\n", encoding="utf-8")
+    netrc.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("NETRC", raising=False)
+    cache_dir = tmp_path / "cache"
+
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=cache_dir) as client:
+        personalised = client.get("/me")
+    assert personalised.json()["me"].startswith("auth:Basic ")
+    assert list(cache_dir.glob("*.json")) == []
+    # The credential-less client must not inherit the .netrc either.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _assert_personalised_and_unshared(server, cache_dir, personalised)
+
+
+def test_use_cache_true_is_still_the_explicit_opt_in(server, tmp_path):
+    # "I know this response is the same for everyone" remains available.
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        first = client.get("/me", auth=("alice", "pw"), use_cache=True)
+        second = client.get("/me", auth=("alice", "pw"), use_cache=True)
+    assert first.from_cache is False
+    assert second.from_cache is True
+    assert server.hit_count("/me") == 1
 
 
 # --------------------------------------------------------------------------- #

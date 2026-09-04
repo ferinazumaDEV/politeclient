@@ -126,8 +126,13 @@ method, URL and params only — never from headers, so no credential ever reache
 filename. The consequence is that two callers with different tokens would produce
 the *same* key, and one could be served the other's personalised response. Rather
 than put credentials in the key, `politeclient` skips the cache entirely when the
-request (or the session) carries `Authorization`, `Cookie`, `Proxy-Authorization`
-or `WWW-Authenticate`.
+request carries credentials by any of the routes `requests` accepts: an explicit
+`Authorization`, `Cookie`, `Proxy-Authorization` or `WWW-Authenticate` header on
+the request or the session, a per-request `auth=` or `cookies=`, `session.auth`,
+a non-empty session cookie jar (any cookie, for any domain — for example one set
+by an earlier login response), and `~/.netrc` when the session's `trust_env` is
+on (the `requests` default). The check is deliberately conservative: when in
+doubt, nothing is written.
 
 If you know a given authenticated response is identical for every caller, opt in
 per request:
