@@ -296,3 +296,58 @@ def test_frozen_clock_still_serves_a_response_the_server_called_fresh(tmp_path):
         cache.set(key, status_code=200, headers={"Cache-Control": "max-age=5"},
                   content=b"hi", url="https://x/y")
         assert cache.get(key) is not None
+
+
+# --- credentials must never share a cache entry -------------------------------
+
+def test_carries_credentials_is_case_insensitive():
+    from politeclient.cache import carries_credentials
+
+    assert carries_credentials({"Authorization": "Bearer a"}) is True
+    assert carries_credentials({"authorization": "Bearer a"}) is True
+    assert carries_credentials({"COOKIE": "sid=1"}) is True
+    assert carries_credentials({"Accept": "application/json"}) is False
+    assert carries_credentials(None) is False
+    assert carries_credentials({}) is False
+
+
+def test_authenticated_request_is_not_cached(tmp_path, monkeypatch):
+    """Two callers with different tokens must not share one entry.
+
+    The cache key is method + URL + params, so an authenticated response is
+    unshareable by construction. Rather than put credentials in the key, the
+    client skips the cache entirely for such requests.
+    """
+    from politeclient.cache import DiskCache
+    from politeclient.client import PoliteClient
+
+    cache = DiskCache(str(tmp_path / "c"))
+    client = PoliteClient(cache=cache)
+
+    calls = []
+
+    class _Resp:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        content = b'{"who":"a"}'
+        url = "https://example.test/me"
+        encoding = "utf-8"
+        reason = "OK"
+        history = ()
+
+        def raise_for_status(self):
+            return None
+
+    def _fake_send(self, request, **kwargs):  # noqa: ANN001
+        calls.append(dict(request.headers))
+        return _Resp()
+
+    monkeypatch.setattr("requests.Session.send", _fake_send, raising=False)
+
+    # Same URL, two different identities. Neither may be served from cache.
+    client.request("GET", "https://example.test/me", headers={"Authorization": "Bearer a"})
+    client.request("GET", "https://example.test/me", headers={"Authorization": "Bearer b"})
+
+    assert len(calls) == 2, "the second identity was served a cached response"
+    assert DiskCache.make_key("GET", "https://example.test/me", None) is not None
+    assert cache.get(DiskCache.make_key("GET", "https://example.test/me", None)) is None

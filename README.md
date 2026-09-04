@@ -36,7 +36,7 @@ Almost every "quick script that talks to an API" grows the same crufty appendage
 - **`Retry-After` aware** — when a server tells you when to come back (seconds *or* an HTTP date), politeclient listens instead of guessing.
 - **Per-host rate-limit governor** — a thread-safe token bucket per host, so a slow, rate-limited API never starves a fast one. Supports sustained rate + bursts.
 - **Honest default `User-Agent`** — sends an identifying UA instead of `python-requests/x.y.z`, the single most common cause of surprise `403`s. Override it with one kwarg.
-- **Optional disk cache for GETs** — content-addressed, TTL'd, atomic writes. Iterate on a scraper without hammering the API every run. It stores an allowlist of response headers only, skips `no-store` and `Vary` responses, and lets the server's `max-age`/`Expires` shorten the TTL — see [Cache limits](#cache-limits).
+- **Optional disk cache for GETs** — content-addressed, TTL'd, atomic writes. Iterate on a scraper without hammering the API every run. **Authenticated requests are not cached** unless you ask for it explicitly. It stores an allowlist of response headers only, skips `no-store` and `Vary` responses, and lets the server's `max-age`/`Expires` shorten the TTL — see [Cache limits](#cache-limits).
 - **Pagination helpers** — lazy generators for both **cursor** and **offset/limit** APIs, with dotted-path extraction (`items_key="data.results"`).
 - **Sane timeouts** — a request with no timeout can hang forever; politeclient defaults to `(5s connect, 30s read)`.
 - **Structured logging** — every request, retry, wait and cache hit as a greppable `key=value` line, or newline-delimited JSON (`POLITECLIENT_LOG=json`).
@@ -120,6 +120,26 @@ with PoliteClient(cache="~/.cache/myscraper", cache_ttl=3600) as client:
 ```
 
 ### Cache limits
+
+**Requests that carry credentials are not cached.** The cache key is built from
+method, URL and params only — never from headers, so no credential ever reaches a
+filename. The consequence is that two callers with different tokens would produce
+the *same* key, and one could be served the other's personalised response. Rather
+than put credentials in the key, `politeclient` skips the cache entirely when the
+request (or the session) carries `Authorization`, `Cookie`, `Proxy-Authorization`
+or `WWW-Authenticate`.
+
+If you know a given authenticated response is identical for every caller, opt in
+per request:
+
+```python
+client.request("GET", url, headers={"Authorization": token}, use_cache=True)
+```
+
+That is a deliberate statement, not a default. Servers *should* mark unshareable
+responses `no-store` or `Vary`, and those are honoured too — but many do not, so
+the safe default does not depend on the server getting it right.
+
 
 The cache is **off by default**; it only exists if you pass `cache=`. When you do turn it on, this is exactly what it is — a small private cache for iterating on a script, not an HTTP caching implementation:
 

@@ -40,6 +40,28 @@ from .retry import parse_retry_after
 #: header nobody thought about is discarded rather than written to disk. In
 #: particular ``Set-Cookie``, ``Authorization``, ``Proxy-Authorization`` and
 #: ``WWW-Authenticate`` never reach a cache file.
+#: Request headers that identify *who* is asking. A response fetched with any of
+#: these is treated as unshareable: the cache key is built from method, URL and
+#: params only, so two callers with different credentials would otherwise collide
+#: on the same entry and one could be served the other's personalised response.
+#: Servers are supposed to mark such responses ``no-store`` or ``Vary``, but many
+#: do not, so the safe default is not to cache them at all.
+CREDENTIAL_REQUEST_HEADERS: FrozenSet[str] = frozenset(
+    {"authorization", "cookie", "proxy-authorization", "www-authenticate"}
+)
+
+
+def carries_credentials(headers: Optional[Mapping[str, Any]]) -> bool:
+    """True if *headers* identify a specific caller.
+
+    Used to skip the cache entirely for authenticated requests. Matching is
+    case-insensitive, as HTTP header names are.
+    """
+    if not headers:
+        return False
+    return any(str(name).lower() in CREDENTIAL_REQUEST_HEADERS for name in headers)
+
+
 CACHEABLE_RESPONSE_HEADERS: FrozenSet[str] = frozenset(
     {
         "content-type",
