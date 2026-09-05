@@ -16,6 +16,10 @@ from typing import Any, Dict
 
 LOGGER_NAME = "politeclient"
 
+#: Name stamped on the one handler politeclient installs itself, so it can be
+#: told apart from handlers the application attached to the same logger.
+HANDLER_NAME = "politeclient"
+
 
 class _KeyValueFormatter(logging.Formatter):
     """Render ``record.event`` + ``record.fields`` as ``k=v`` pairs."""
@@ -49,6 +53,13 @@ def _render(value: Any) -> str:
 def get_logger(log_format: str | None = None) -> logging.Logger:
     """Return the shared ``politeclient`` logger, configured once.
 
+    politeclient only ever configures its *own* handler. When the logger has no
+    handlers at all, one :class:`logging.StreamHandler` named
+    :data:`HANDLER_NAME` is attached and propagation is switched off. A handler
+    the application attached itself is never touched — its formatter, level and
+    the logger's propagation stay exactly as the application configured them —
+    so ``log_format`` only has an effect on the politeclient handler.
+
     Args:
         log_format: ``"json"`` or ``"kv"``. Falls back to the
             ``POLITECLIENT_LOG`` env var, then to ``"kv"``.
@@ -57,13 +68,16 @@ def get_logger(log_format: str | None = None) -> logging.Logger:
     fmt = (log_format or os.environ.get("POLITECLIENT_LOG") or "kv").lower()
     formatter: logging.Formatter = _JsonFormatter() if fmt == "json" else _KeyValueFormatter()
 
-    # Reconfigure the handler idempotently so repeated construction is cheap and
-    # switching formats works.
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        logger.addHandler(handler)
+    own = next((h for h in logger.handlers if h.get_name() == HANDLER_NAME), None)
+    if own is None and not logger.handlers:
+        own = logging.StreamHandler()
+        own.set_name(HANDLER_NAME)
+        logger.addHandler(own)
         logger.propagate = False
-    logger.handlers[0].setFormatter(formatter)
+    # Reconfigure *our* handler idempotently so repeated construction is cheap
+    # and switching formats works; foreign handlers are left as found.
+    if own is not None:
+        own.setFormatter(formatter)
     return logger
 
 

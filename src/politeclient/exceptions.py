@@ -19,8 +19,10 @@ class RetryBudgetExceeded(PoliteError):
 
     Attributes:
         attempts: How many attempts were made in total.
-        last_status: The last HTTP status code seen, if the failures were
-            HTTP responses rather than transport errors.
+        last_status: The last HTTP status code seen before the budget ran out,
+            if any attempt got an HTTP response at all (for example a ``503``
+            followed by a connection reset). ``None`` when every attempt failed
+            at the transport level.
         last_exception: The last transport-level exception seen, if any.
     """
 

@@ -30,6 +30,7 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 from requests.structures import CaseInsensitiveDict
+from requests.utils import get_netrc_auth
 
 from . import __version__
 from .cache import carries_credentials, CachedResponse, DiskCache
@@ -59,7 +60,14 @@ class PoliteClient:
     """A polite, resilient HTTP client.
 
     Args:
-        base_url: Optional base joined to relative paths passed to the verbs.
+        base_url: Optional base joined to the paths passed to the verbs with
+            :func:`urllib.parse.urljoin`, so RFC 3986 rules apply. A bare host
+            works either way, but a base that carries a path prefix must end
+            with ``/`` and the paths must be relative:
+            ``base_url="https://api.example.com/v1/"`` + ``get("users")``
+            requests ``/v1/users``, whereas a leading slash (``"/users"``) or a
+            base without the trailing slash resets to the host root and
+            silently drops ``/v1``. An absolute URL is used as-is.
         rate_limit: A :class:`RateLimit` applied *per host*. ``None`` disables
             rate limiting.
         retry: A :class:`RetryPolicy`. Defaults to a sensible policy.
@@ -195,9 +203,27 @@ class PoliteClient:
         # one entry. Skip the cache unless the caller opts in explicitly with
         # ``use_cache=True``, which is a deliberate "I know this response is the
         # same for everyone" statement.
-        _authenticated = carries_credentials(kwargs.get("headers")) or carries_credentials(
-            self._session.headers
-        )
+        #
+        # Credentials reach ``requests`` by several routes, not only a literal
+        # ``Authorization``/``Cookie`` header: a per-request ``auth=`` or
+        # ``cookies=``, ``session.auth``, a cookie jar filled by an earlier
+        # ``Set-Cookie`` (a login flow), or ``~/.netrc`` — which ``requests``
+        # applies on its own whenever ``trust_env`` is on. Every route is checked
+        # and the check fails closed: *any* cookie in the jar, for any domain,
+        # disables caching by default. The computation only runs when it can
+        # change the outcome, so ``~/.netrc`` is not parsed for a POST or when
+        # the cache is off.
+        _authenticated = False
+        if self.cache is not None and method == "GET" and use_cache is None:
+            _authenticated = (
+                carries_credentials(kwargs.get("headers"))
+                or carries_credentials(self._session.headers)
+                or kwargs.get("auth") is not None
+                or self._session.auth is not None
+                or bool(kwargs.get("cookies"))
+                or len(self._session.cookies) > 0
+                or bool(self._session.trust_env and get_netrc_auth(full_url))
+            )
         cache_enabled = (
             self.cache is not None
             and method == "GET"
@@ -262,6 +288,7 @@ class PoliteClient:
                 raise RetryBudgetExceeded(
                     f"{method} {full_url} failed after {attempt + 1} attempt(s): {exc}",
                     attempts=attempt + 1,
+                    last_status=last_status,
                     last_exception=exc,
                 ) from exc
 

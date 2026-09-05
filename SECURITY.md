@@ -27,14 +27,14 @@ When it is enabled:
 - Responses marked `Cache-Control: no-store`, and responses carrying a non-empty `Vary`, are not stored at all.
 - File names are hashes, but the **directory listing still reveals how many entries exist**, and any body you fetch is readable by anyone who can read the directory.
 
-**You choose the directory, so you own its permissions.** politeclient creates it with your process's default umask and does not change it. If the responses you cache are sensitive, put the cache somewhere only your user can read (for example `chmod 700` on the directory), or leave the cache off. `DiskCache.clear()` deletes every entry when you are done.
+**You choose the directory, so you own its permissions.** politeclient creates it with your process's default umask and does not change it. If the responses you cache are sensitive, put the cache somewhere only your user can read (for example `chmod 700` on the directory), or leave the cache off. `DiskCache.clear()` deletes every entry when you are done — only files named `<sha256>.json`, the shape every entry has, so anything else you keep in that directory is left alone.
 
 ## Other things worth knowing
 
 - **Logs.** Structured log lines include the request method, the URL you passed and the status code. Query parameters supplied via `params=` are not logged, but a credential embedded directly in a URL string would be.
 - **Redirects.** politeclient uses `requests`' default redirect handling; a redirect to another host is followed, and the cache stores the final URL.
 - **TLS verification** is `requests`' default (on). politeclient never disables it for you.
-- **No telemetry.** It makes no requests you did not ask for, and reads no configuration beyond the `POLITECLIENT_LOG` environment variable.
+- **No telemetry.** It makes no requests you did not ask for, and politeclient itself reads no configuration beyond the `POLITECLIENT_LOG` environment variable. The underlying `requests` session, however, honours `~/.netrc` (or the file named by `NETRC`) and the proxy and CA-bundle environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`) unless you pass a session with `trust_env=False`. Credentials that `requests` picks up from `~/.netrc` count as credentials for the cache rule above: such responses are not cached.
 
 ## Out of scope
 

@@ -7,13 +7,21 @@ offline.
 
 from __future__ import annotations
 
+import stat
+
 import pytest
+import requests
 
 from politeclient import (
+    DEFAULT_USER_AGENT,
+    DiskCache,
     PoliteClient,
+    PoliteError,
     RateLimit,
+    RateLimitConfigError,
     RetryBudgetExceeded,
     RetryPolicy,
+    __version__,
 )
 
 
@@ -113,6 +121,142 @@ def test_transport_error_raises_retry_budget_exceeded():
 
     assert excinfo.value.attempts == 2  # initial + 1 retry
     assert len(sleeps.sleeps) == 1
+    # Every attempt died at the transport level: no HTTP status was ever seen.
+    assert excinfo.value.last_status is None
+    assert isinstance(excinfo.value.last_exception, requests.ConnectionError)
+
+
+def test_retry_budget_exceeded_reports_the_last_status_seen(monkeypatch):
+    # A 503 followed by a connection reset: the exception must carry the 503,
+    # as its docstring promises, not silently drop it.
+    class _Unavailable:
+        status_code = 503
+        headers = {}
+
+        def close(self):
+            return None
+
+    outcomes = [_Unavailable(), requests.ConnectionError("reset by peer")]
+
+    def fake_request(method, url, **kwargs):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    policy = RetryPolicy(max_retries=1, backoff_factor=0.0)
+    with PoliteClient(base_url="http://127.0.0.1:1", retry=policy, sleep=lambda s: None) as client:
+        monkeypatch.setattr(client._session, "request", fake_request)
+        with pytest.raises(RetryBudgetExceeded) as excinfo:
+            client.get("/anything")
+
+    assert excinfo.value.attempts == 2
+    assert excinfo.value.last_status == 503
+    assert isinstance(excinfo.value.last_exception, requests.ConnectionError)
+
+
+def test_polite_error_is_the_documented_catch_all():
+    assert issubclass(RetryBudgetExceeded, PoliteError)
+    assert issubclass(RateLimitConfigError, PoliteError)
+    with pytest.raises(PoliteError):
+        RateLimit(rate=0)
+    policy = RetryPolicy(max_retries=0)
+    with PoliteClient(base_url="http://127.0.0.1:1", retry=policy, timeout=1.0) as client:
+        with pytest.raises(PoliteError) as excinfo:
+            client.get("/anything")
+    assert isinstance(excinfo.value, RetryBudgetExceeded)
+
+
+# --------------------------------------------------------------------------- #
+# Verb shortcuts and their retry eligibility
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("verb", "retried"),
+    [("head", True), ("put", True), ("patch", False), ("delete", True)],
+)
+def test_verb_shortcuts_send_the_method_and_follow_retry_eligibility(server, verb, retried):
+    # Idempotent methods (HEAD, PUT, DELETE) are retried on a 503; PATCH is not.
+    def handler(ctx):
+        ctx.state.setdefault("methods", []).append(ctx.method)
+        if ctx.count <= 1:
+            return 503, {}, "warming up"
+        return 200, {}, {"ok": True}
+
+    server.route("/thing", handler)
+    policy = RetryPolicy(max_retries=2, backoff_factor=0.0)
+    with PoliteClient(base_url=server.base_url, retry=policy, sleep=lambda s: None) as client:
+        if verb == "head":
+            resp = client.head("/thing")
+        elif verb == "put":
+            resp = client.put("/thing", data=b"replacement")
+        elif verb == "patch":
+            resp = client.patch("/thing", json={"field": "value"})
+        else:
+            resp = client.delete("/thing")
+
+    assert set(server.state["methods"]) == {verb.upper()}
+    if retried:
+        assert resp.status_code == 200
+        assert server.hit_count("/thing") == 2
+    else:
+        assert resp.status_code == 503
+        assert server.hit_count("/thing") == 1
+
+
+# --------------------------------------------------------------------------- #
+# base_url join semantics (urljoin, as documented)
+# --------------------------------------------------------------------------- #
+class _Sent:
+    """Minimal stand-in for a requests.Response on the happy path."""
+
+    status_code = 200
+    headers: dict = {}
+
+    def close(self) -> None:
+        return None
+
+
+def _capture_url(client, monkeypatch):
+    """Replace the session's request() so the test sees the URL that would be sent."""
+    seen = []
+
+    def fake_request(method, url, **kwargs):
+        seen.append(url)
+        return _Sent()
+
+    monkeypatch.setattr(client._session, "request", fake_request)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("base_url", "path", "expected"),
+    [
+        # A base with a path prefix keeps it only for a trailing-slash base
+        # and a relative path — the documented shape.
+        ("https://api.example.com/v1/", "users", "https://api.example.com/v1/users"),
+        # The two traps the docs warn about: a leading slash resets to the
+        # host root, and a base without the trailing slash drops its last
+        # segment. Pinned so a change here is a deliberate API decision.
+        ("https://api.example.com/v1/", "/users", "https://api.example.com/users"),
+        ("https://api.example.com/v1", "users", "https://api.example.com/users"),
+        # A bare host works either way.
+        ("https://api.example.com", "/users", "https://api.example.com/users"),
+        ("https://api.example.com", "users", "https://api.example.com/users"),
+    ],
+    ids=["prefix-kept", "leading-slash-resets", "no-trailing-slash-drops", "bare-host-abs", "bare-host-rel"],
+)
+def test_base_url_is_joined_with_urljoin(base_url, path, expected, monkeypatch):
+    with PoliteClient(base_url=base_url) as client:
+        seen = _capture_url(client, monkeypatch)
+        client.get(path)
+    assert seen == [expected]
+
+
+def test_absolute_url_ignores_base_url(monkeypatch):
+    with PoliteClient(base_url="https://api.example.com/v1/") as client:
+        seen = _capture_url(client, monkeypatch)
+        client.get("https://other.example/status")
+    assert seen == ["https://other.example/status"]
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +364,112 @@ def test_server_max_age_beats_a_longer_local_ttl(server, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Credentials must never share a cache entry — one test per route they take
+# --------------------------------------------------------------------------- #
+# The cache key is method + URL + params, so a personalised response is
+# unshareable by construction. ``requests`` accepts credentials several ways,
+# not only as a literal ``Authorization``/``Cookie`` header; every route must
+# skip the cache, and a second, credential-less client pointed at the same
+# directory must never be served the personalised body.
+
+
+def _whoami(ctx):
+    """Personalise the body on whatever credential the server sees."""
+    if ctx.headers.get("authorization"):
+        return 200, {}, {"me": "auth:" + ctx.headers["authorization"]}
+    if ctx.headers.get("cookie"):
+        return 200, {}, {"me": "cookie:" + ctx.headers["cookie"]}
+    return 200, {}, {"me": "anonymous"}
+
+
+def _assert_personalised_and_unshared(server, tmp_path, personalised):
+    """``personalised`` came from the network, was not written, and cannot leak."""
+    assert personalised.from_cache is False
+    assert personalised.json()["me"] != "anonymous"
+    me_key = DiskCache.make_key("GET", server.url("/me"), None)
+    assert not (tmp_path / f"{me_key}.json").exists()
+    # A second client with no credentials and the same cache directory.
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as anonymous:
+        second = anonymous.get("/me")
+    assert second.from_cache is False
+    assert second.json() == {"me": "anonymous"}
+
+
+def test_auth_kwarg_is_not_cached(server, tmp_path):
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        personalised = client.get("/me", auth=("alice", "pw"))
+    assert list(tmp_path.glob("*.json")) == []
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_cookies_kwarg_is_not_cached(server, tmp_path):
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        personalised = client.get("/me", cookies={"session": "USER_B_SECRET"})
+    assert list(tmp_path.glob("*.json")) == []
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_session_auth_is_not_cached(server, tmp_path):
+    server.route("/me", _whoami)
+    session = requests.Session()
+    session.auth = ("carol", "pw")
+    with PoliteClient(base_url=server.base_url, cache=tmp_path, session=session) as client:
+        personalised = client.get("/me")
+    assert list(tmp_path.glob("*.json")) == []
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_session_cookie_jar_from_login_is_not_cached(server, tmp_path):
+    # A login flow: the server sets a cookie, the session jar keeps it, and the
+    # next GET goes out with ``Cookie:`` — without anyone passing headers=.
+    server.route("/login", lambda ctx: (200, {"Set-Cookie": "session=USER_A_SECRET; Path=/"},
+                                        {"ok": True}))
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        client.get("/login")
+        personalised = client.get("/me")
+    # The anonymous /login response is legitimately cached; /me must not be.
+    login_key = DiskCache.make_key("GET", server.url("/login"), None)
+    assert [p.name for p in tmp_path.glob("*.json")] == [f"{login_key}.json"]
+    _assert_personalised_and_unshared(server, tmp_path, personalised)
+
+
+def test_netrc_credentials_are_not_cached(server, tmp_path, monkeypatch):
+    # ``requests`` adds Authorization from ~/.netrc on its own when trust_env is
+    # on (the default) — the caller never sees a credential in their own code.
+    home = tmp_path / "home"
+    home.mkdir()
+    netrc = home / ".netrc"
+    netrc.write_text("machine 127.0.0.1 login dave password pw\n", encoding="utf-8")
+    netrc.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("NETRC", raising=False)
+    cache_dir = tmp_path / "cache"
+
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=cache_dir) as client:
+        personalised = client.get("/me")
+    assert personalised.json()["me"].startswith("auth:Basic ")
+    assert list(cache_dir.glob("*.json")) == []
+    # The credential-less client must not inherit the .netrc either.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _assert_personalised_and_unshared(server, cache_dir, personalised)
+
+
+def test_use_cache_true_is_still_the_explicit_opt_in(server, tmp_path):
+    # "I know this response is the same for everyone" remains available.
+    server.route("/me", _whoami)
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        first = client.get("/me", auth=("alice", "pw"), use_cache=True)
+        second = client.get("/me", auth=("alice", "pw"), use_cache=True)
+    assert first.from_cache is False
+    assert second.from_cache is True
+    assert server.hit_count("/me") == 1
+
+
+# --------------------------------------------------------------------------- #
 # Headers
 # --------------------------------------------------------------------------- #
 def test_default_user_agent_is_not_python_requests(server):
@@ -238,6 +488,31 @@ def test_custom_user_agent_is_sent(server):
     server.route("/echo", lambda ctx: (200, {}, {"ua": ctx.headers.get("user-agent", "")}))
     with PoliteClient(base_url=server.base_url, user_agent="MyBot/9.9") as client:
         assert client.get("/echo").json()["ua"] == "MyBot/9.9"
+
+
+def test_default_user_agent_is_exactly_the_exported_constant(server):
+    server.route("/echo", lambda ctx: (200, {}, {"ua": ctx.headers.get("user-agent", "")}))
+    with PoliteClient(base_url=server.base_url) as client:
+        assert client.get("/echo").json()["ua"] == DEFAULT_USER_AGENT
+    assert DEFAULT_USER_AGENT.startswith(f"politeclient/{__version__} ")
+
+
+def test_cache_hit_rebuilds_a_response_from_the_cached_entry(server, tmp_path):
+    server.route(
+        "/data",
+        lambda ctx: (200, {"Content-Type": "application/json; charset=utf-8", "ETag": '"v1"'},
+                     {"n": ctx.count}),
+    )
+    with PoliteClient(base_url=server.base_url, cache=tmp_path) as client:
+        client.get("/data")
+        hit = client.get("/data")
+
+    assert hit.from_cache is True
+    assert hit.status_code == 200
+    assert hit.headers["ETag"] == '"v1"'
+    assert hit.encoding == "utf-8"
+    assert hit.url == server.url("/data")
+    assert hit.json() == {"n": 1}
 
 
 # --------------------------------------------------------------------------- #
@@ -273,3 +548,46 @@ def test_cursor_pagination_end_to_end(server):
         got = list(client.paginate_cursor("/feed", items_key="data", cursor_key="next"))
 
     assert got == [1, 2, 3, 4, 5]
+
+
+def test_paginate_offset_knobs_reach_the_query_string(server):
+    def handler(ctx):
+        ctx.state.setdefault("queries", []).append(dict(ctx.query))
+        start, size = int(ctx.query["from"]), int(ctx.query["size"])
+        return 200, {}, {"rows": list(range(start, min(start + size, 7)))}
+
+    server.route("/rows", handler)
+    with PoliteClient(base_url=server.base_url) as client:
+        got = list(client.paginate_offset(
+            "/rows", items_key="rows", limit=3,
+            limit_param="size", offset_param="from", start_offset=1,
+            params={"q": "x"},
+        ))
+
+    assert got == [1, 2, 3, 4, 5, 6]
+    assert server.state["queries"] == [
+        {"q": "x", "size": "3", "from": "1"},
+        {"q": "x", "size": "3", "from": "4"},
+        {"q": "x", "size": "3", "from": "7"},  # the empty page that ends it
+    ]
+
+
+def test_paginate_cursor_knobs_reach_the_query_string(server):
+    pages = {"p2": {"data": [1, 2], "next": "p3"}, "p3": {"data": [3], "next": None}}
+
+    def handler(ctx):
+        ctx.state.setdefault("queries", []).append(dict(ctx.query))
+        return 200, {}, pages[ctx.query["page_token"]]
+
+    server.route("/feed", handler)
+    with PoliteClient(base_url=server.base_url) as client:
+        got = list(client.paginate_cursor(
+            "/feed", items_key="data", cursor_key="next",
+            cursor_param="page_token", start_cursor="p2", params={"q": "x"},
+        ))
+
+    assert got == [1, 2, 3]
+    assert server.state["queries"] == [
+        {"q": "x", "page_token": "p2"},
+        {"q": "x", "page_token": "p3"},
+    ]

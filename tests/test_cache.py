@@ -59,6 +59,20 @@ def test_clear(tmp_path):
     assert cache.get(DiskCache.make_key("GET", "https://x/0")) is None
 
 
+def test_clear_leaves_unrelated_files_alone(tmp_path):
+    # Entries are always <64 hex>.json; other files sharing the directory —
+    # even other JSON — are not the cache's to delete.
+    cache = DiskCache(tmp_path)
+    (tmp_path / "my-unrelated-config.json").write_text('{"keep": true}', encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("keep", encoding="utf-8")
+    for i in range(2):
+        cache.set(DiskCache.make_key("GET", f"https://x/{i}"),
+                  status_code=200, headers={}, content=b"x", url="")
+    assert cache.clear() == 2
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["my-unrelated-config.json", "notes.txt"]
+    assert (tmp_path / "my-unrelated-config.json").read_text(encoding="utf-8") == '{"keep": true}'
+
+
 def test_corrupt_entry_is_a_miss(tmp_path):
     cache = DiskCache(tmp_path)
     key = DiskCache.make_key("GET", "https://x/y")
@@ -351,3 +365,20 @@ def test_authenticated_request_is_not_cached(tmp_path, monkeypatch):
     assert len(calls) == 2, "the second identity was served a cached response"
     assert DiskCache.make_key("GET", "https://example.test/me", None) is not None
     assert cache.get(DiskCache.make_key("GET", "https://example.test/me", None)) is None
+
+
+# --- CachedResponse: the value a cache hit is rebuilt from -------------------
+
+def test_cached_response_accessors():
+    from politeclient import CachedResponse
+
+    cached = CachedResponse(
+        status_code=200,
+        headers={"Content-Type": "application/json"},
+        content=b'{"a": 1}',
+        url="https://x/y",
+        created_at=time.time() - 5,
+    )
+    assert cached.json() == {"a": 1}
+    assert cached.text == '{"a": 1}'
+    assert 5 <= cached.age < 60
