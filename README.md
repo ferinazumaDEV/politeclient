@@ -46,9 +46,7 @@ Almost every "quick script that talks to an API" grows the same crufty appendage
 ## Install
 
 ```bash
-pip install politeclient          # from PyPI (once published)
-# or, from source:
-pip install .
+pip install politeclient
 ```
 
 Requires Python 3.9+ and `requests`. That's the whole dependency tree.
