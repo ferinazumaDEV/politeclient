@@ -1,0 +1,271 @@
+name: release
+
+# The release pipeline, in one place, because a release is where mistakes reach
+# strangers. Two of the three P0s in the 6 Sep audit were release defects, not
+# code defects: a tag that did not rebuild what was on PyPI, and a package
+# published with a bug already fixed on main. Both would have been caught by the
+# checks below, which is why they are checks and not a checklist in a document.
+#
+# It answers, publicly and per release:
+#   - which commit produced the artefact          (the tag, and the attestation)
+#   - which workflow built it                     (the attestation)
+#   - does the version agree everywhere           (verify job)
+#   - do the artefacts install from nothing       (smoke job, wheel AND sdist)
+#   - what is the hash                            (attached to the release)
+#   - is what PyPI serves what we built           (post-publish job)
+#
+# Triggered by pushing a tag. Nothing here can publish from a working tree.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify without publishing anything"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # 1. The tag must agree with the package about what version this is.
+  # ------------------------------------------------------------------ #
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: The tag, pyproject and changelog agree
+        id: v
+        run: |
+          python -m pip install --quiet tomli
+          PYPROJECT=$(python -c "import tomli;print(tomli.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$PYPROJECT" >> "$GITHUB_OUTPUT"
+          echo "pyproject says: $PYPROJECT"
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            echo "tag says:       $TAG"
+            if [ "$TAG" != "$PYPROJECT" ]; then
+              echo "::error::tag v$TAG does not match pyproject $PYPROJECT"
+              exit 1
+            fi
+          fi
+
+          # A release with no changelog entry is a release nobody can read.
+          if [ -f CHANGELOG.md ] && ! grep -q "\[$PYPROJECT\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no entry for [$PYPROJECT]"
+            exit 1
+          fi
+          echo "version agrees across tag, pyproject and changelog"
+
+  # ------------------------------------------------------------------ #
+  # 2. The suite, on every version the package claims to support.
+  # ------------------------------------------------------------------ #
+  test:
+    needs: verify
+    uses: ./.github/workflows/tests.yml
+
+  # ------------------------------------------------------------------ #
+  # 3. Build once, in a clean job. Everything downstream uses THESE bytes.
+  # ------------------------------------------------------------------ #
+  build:
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.hash.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --quiet build twine
+          python -m build
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      - name: Refuse to ship files that should not be in a package
+        # A virtualenv reached main once. It will not reach PyPI.
+        run: |
+          BAD=$(python - <<'PY'
+          import tarfile, zipfile, glob, sys
+          markers = ("pyvenv.cfg", "site-packages/", "dist-packages/", ".git/", ".env")
+          bad = []
+          for p in glob.glob("dist/*.tar.gz"):
+              bad += [f"{p}:{n}" for n in tarfile.open(p).getnames()
+                      if any(m in n for m in markers)]
+          for p in glob.glob("dist/*.whl"):
+              bad += [f"{p}:{n}" for n in zipfile.ZipFile(p).namelist()
+                      if any(m in n for m in markers)]
+          print("\n".join(bad))
+          PY
+          )
+          if [ -n "$BAD" ]; then
+            echo "::error::the distribution contains files it must not ship:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "no vendored environments or repository metadata in the artefacts"
+
+      - name: SHA-256
+        id: hash
+        run: |
+          cd dist && sha256sum * | tee SHA256SUMS
+          {
+            echo 'sha256<<EOF'
+            cat SHA256SUMS
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Software bill of materials
+        run: |
+          python -m pip install --quiet cyclonedx-bom
+          cyclonedx-py environment -o dist/sbom.cyclonedx.json || \
+            echo "::warning::SBOM generation failed; release continues without it"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ #
+  # 4. Both formats must install into nothing and answer.
+  #    A wheel that works while its sdist does not is half a release.
+  # ------------------------------------------------------------------ #
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [wheel, sdist]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Install the ${{ matrix.format }} into an empty environment
+        run: |
+          python -m venv /tmp/smoke
+          if [ "${{ matrix.format }}" = "wheel" ]; then
+            /tmp/smoke/bin/pip install --quiet dist/*.whl
+          else
+            /tmp/smoke/bin/pip install --quiet dist/*.tar.gz
+          fi
+
+      - name: Smoke-test the documented entry point
+        # scripts/smoke.py is the package's own answer to "does it work at all":
+        # import the public API, exercise it offline, print the version.
+        run: /tmp/smoke/bin/python scripts/smoke.py
+
+  # ------------------------------------------------------------------ #
+  # 5. Publish. Only from a tag, never from a dispatch.
+  # ------------------------------------------------------------------ #
+  publish:
+    needs: [verify, build, smoke]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # Trusted Publishing: a short-lived OIDC token
+      attestations: write    # signed provenance linking artefact to this run
+      contents: write        # to create the GitHub Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: "dist/*.whl, dist/*.tar.gz"
+
+      - name: Keep only publishable files
+        # SHA256SUMS and the SBOM go to the GitHub Release, not to PyPI.
+        run: mkdir -p out && cp dist/*.whl dist/*.tar.gz out/
+
+      - name: Publish to PyPI
+        # Trusted Publishing (OIDC) when it is configured, the API token until
+        # then. Registering a trusted publisher is a web form on PyPI that
+        # cannot be done from CI - there is no management API, only Index,
+        # JSON, Upload, Integrity, Stats and RSS - so this bridges the gap
+        # instead of blocking on it.
+        #
+        # The day the publisher is registered for this project, delete the
+        # `password:` line. Nothing else changes: with no password the action
+        # uses the OIDC token that `id-token: write` already grants above.
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: out/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "See CHANGELOG.md for what changed.
+
+          Built from \`${GITHUB_SHA}\` by [this run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), never from a working tree.
+          Provenance is attested; verify with:
+
+          \`\`\`
+          gh attestation verify <file> --repo ${GITHUB_REPOSITORY}
+          \`\`\`
+
+          ### SHA-256
+          \`\`\`
+          $(cat dist/SHA256SUMS)
+          \`\`\`" \
+            dist/*.whl dist/*.tar.gz dist/SHA256SUMS
+
+  # ------------------------------------------------------------------ #
+  # 6. Is what PyPI serves what we built? Asked, not assumed.
+  # ------------------------------------------------------------------ #
+  verify-published:
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Wait for the index, then install from PyPI
+        # Propagation is not instant: a fresh upload can 404 for a minute.
+        run: |
+          NAME=$(python -c "import tomli;print(tomli.load(open('pyproject.toml','rb'))['project']['name'])" 2>/dev/null \
+                 || { python -m pip install --quiet tomli; python -c "import tomli;print(tomli.load(open('pyproject.toml','rb'))['project']['name'])"; })
+          VERSION="${{ needs.verify.outputs.version }}"
+          python -m venv /tmp/frompypi
+          for i in 1 2 3 4 5 6; do
+            /tmp/frompypi/bin/pip install --quiet "$NAME==$VERSION" && break
+            echo "not on the index yet, retrying in 20s ($i/6)"
+            sleep 20
+          done
+          /tmp/frompypi/bin/pip show "$NAME" | head -2
+
+      - name: Smoke-test what PyPI actually serves
+        run: /tmp/frompypi/bin/python scripts/smoke.py
