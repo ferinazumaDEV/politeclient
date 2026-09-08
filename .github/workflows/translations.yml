@@ -1,0 +1,43 @@
+name: translations
+
+# Two copies of one fact will drift. Every serious defect this repository has had
+# was an instance of that: an archive that no longer said what main said, a README
+# claiming a Python floor the package did not support, a home page summarising its
+# own case study wrongly. A stale translation is the same bug with a wider blast
+# radius, because a reader in that language has no way to suspect it.
+#
+# So the Spanish README records the commit of the English one it was translated
+# from, and this refuses to let the English move without a decision being made
+# about the Spanish.
+#
+# It costs one line of maintenance per English edit. That is the price of the
+# second language, and it is cheaper than discovering in six months that the
+# Spanish page promises something the project stopped doing.
+
+on:
+  push:
+    branches: [main]
+    paths: ['README.md', 'README.es.md', 'scripts/check-translations.py']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  in-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The check reads git history to find each file's last commit, so a
+          # shallow clone would make it answer with whatever it could see.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Translations are in sync with their source
+        run: python3 scripts/check-translations.py

@@ -1,5 +1,7 @@
 # politeclient
 
+[English](README.md) · **Español**: [README.es.md](README.es.md)
+
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 **A careful, well-behaved HTTP client for Python — every good-citizen behaviour you keep re-writing for each new API, in one small wrapper around `requests`.**
@@ -228,7 +230,7 @@ politeclient is one of a family of small, focused building blocks I maintain for
 
 - [The GEO Handbook](https://github.com/ferinazumaDEV/generative-engine-optimization-handbook) — the open reference on getting content cited by AI answer engines (ChatGPT, Perplexity, Google AI Overviews, Gemini, Copilot).
 - [webhook-replay](https://github.com/ferinazumaDEV/webhook-replay) — capture a webhook once, then replay it at your local app as many times as you need; the other half of the "HTTP that behaves" toolkit.
-- [typedout](https://github.com/ferinazumaDEV/typedout) — reliable structured output from any LLM: schema-validated JSON with tolerant repair and retries.
+- [typedout](https://github.com/ferinazumaDEV/typedout) — reliable structured output from OpenAI and Anthropic, with a provider interface for others: schema-validated JSON with tolerant repair and retries.
 - [scaffld](https://github.com/ferinazumaDEV/scaffld) — scaffold fully-wired Python projects (tests, CI, pre-commit, license) from templates, with a TUI.
 - Hub & writing: [zentimes.es](https://zentimes.es).
 
