@@ -1,0 +1,18 @@
+# Dependabot keeps the SHA-pinned actions below current (the "# vN" comment is what it reads)
+# and, where the repository is a Python package, its declared dependencies. Version updates
+# only: they arrive as pull requests that run the same CI as everything else.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
