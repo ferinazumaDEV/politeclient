@@ -6,6 +6,8 @@ Notable changes, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-09-13
+
 ### Added
 
 - **A release pipeline.** A tag now builds in a clean job, refuses artefacts
@@ -27,6 +29,8 @@ Notable changes, newest first. The format follows
 
 - `actions/checkout` and `actions/setup-python` on v7; no deprecated-runtime
   warnings.
+- CI on Python 3.13 and 3.14 as well; classifiers list every version tested.
+
 
 ## [0.1.0] — 2026-09-05
 
