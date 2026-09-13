@@ -131,10 +131,26 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Software bill of materials
+        # Of the PACKAGE, not of this runner. `cyclonedx-py environment` describes
+        # whatever Python it is pointed at, so it is pointed at a clean venv that
+        # holds only the wheel just built and its runtime dependencies -- the
+        # thing a user installs, not the build tooling. It used to run against
+        # the build environment and was allowed to fail with a warning; a bill
+        # of materials that may silently be missing or describe the wrong thing
+        # is not evidence, so it is required now and checked for content.
         run: |
+          python -m venv /tmp/sbom-env
+          /tmp/sbom-env/bin/pip install --quiet dist/*.whl
           python -m pip install --quiet cyclonedx-bom
-          cyclonedx-py environment -o dist/sbom.cyclonedx.json || \
-            echo "::warning::SBOM generation failed; release continues without it"
+          cyclonedx-py environment /tmp/sbom-env/bin/python \
+            --pyproject pyproject.toml -o dist/sbom.cyclonedx.json
+          python - <<'EOF'
+          import json
+          bom = json.load(open("dist/sbom.cyclonedx.json"))
+          n = len(bom.get("components", []))
+          assert bom.get("bomFormat") == "CycloneDX" and n >= 1, f"empty or malformed SBOM ({n} components)"
+          print(f"SBOM: {n} components, spec {bom.get('specVersion')}")
+          EOF
 
       - uses: actions/upload-artifact@v4
         with:
@@ -237,8 +253,10 @@ jobs:
           ### SHA-256
           \`\`\`
           $(cat dist/SHA256SUMS)
-          \`\`\`" \
-            dist/*.whl dist/*.tar.gz dist/SHA256SUMS
+          \`\`\`
+
+          \`sbom.cyclonedx.json\` describes the package and its runtime dependencies as installed from this wheel." \
+            dist/*.whl dist/*.tar.gz dist/SHA256SUMS dist/sbom.cyclonedx.json
 
   # ------------------------------------------------------------------ #
   # 6. Is what PyPI serves what we built? Asked, not assumed.
@@ -268,3 +286,48 @@ jobs:
 
       - name: Smoke-test what PyPI actually serves
         run: /tmp/frompypi/bin/python scripts/smoke.py
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: PyPI serves the bytes we built, with provenance
+        # Installing and importing proves the index serves *something* that
+        # works. This proves it serves *these* files: every wheel and sdist we
+        # built must appear on PyPI for this version with the same SHA-256, and
+        # each must carry a PEP 740 provenance record, which the publish action
+        # uploads under Trusted Publishing. Files published before OIDC have
+        # `provenance: null`; from this release on, null is a failure.
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          python - <<'EOF'
+          import json, os, re, sys, urllib.request
+          try:
+              import tomllib
+          except ModuleNotFoundError:
+              import tomli as tomllib
+          name = tomllib.load(open("pyproject.toml", "rb"))["project"]["name"]
+          version = os.environ["VERSION"]
+          built = {}
+          for line in open("dist/SHA256SUMS"):
+              digest, fname = line.split()
+              if fname.endswith((".whl", ".tar.gz")):
+                  built[fname] = digest
+          info = json.load(urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json"))
+          served = {u["filename"]: (u["digests"]["sha256"], u.get("provenance")) for u in info["urls"]}
+          bad = []
+          for fname, digest in built.items():
+              if fname not in served:
+                  bad.append(f"{fname}: built, but not on PyPI for {version}")
+              elif served[fname][0] != digest:
+                  bad.append(f"{fname}: PyPI sha256 {served[fname][0][:12]} != built {digest[:12]}")
+              elif not served[fname][1]:
+                  bad.append(f"{fname}: no provenance record on PyPI (PEP 740)")
+              else:
+                  print(f"ok  {fname}  sha256 matches, provenance present")
+          if bad:
+              print("\n".join("FAIL  " + b for b in bad)); sys.exit(1)
+          print(f"{len(built)} files: PyPI serves the bytes we built, with provenance")
+          EOF
