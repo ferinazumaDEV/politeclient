@@ -13,7 +13,7 @@ cache, pagination helpers, sensible timeouts and structured logging.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .cache import CachedResponse, DiskCache
 from .client import DEFAULT_USER_AGENT, PoliteClient
