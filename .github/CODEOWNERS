@@ -1,0 +1,4 @@
+# Who is asked to review. Declared, not enforced: "require review from code owners" is off on
+# purpose, because a single maintainer cannot approve their own pull request and a rule that is
+# always bypassed is a ritual, not a guard. The guard is CI, which nothing merges without.
+* @ferinazumaDEV
