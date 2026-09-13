@@ -297,13 +297,21 @@ jobs:
         # works. This proves it serves *these* files: every wheel and sdist we
         # built must appear on PyPI for this version with the same SHA-256, and
         # each must carry a PEP 740 provenance record, which the publish action
-        # uploads under Trusted Publishing. Files published before OIDC have
-        # `provenance: null`; from this release on, null is a failure.
+        # uploads under Trusted Publishing.
+        #
+        # Provenance is read from PyPI's Integrity API
+        # (/integrity/<project>/<version>/<file>/provenance), NOT from the
+        # `provenance` key of the JSON API: that key is null for every file on
+        # PyPI, attested or not -- sigstore's own releases show null there. The
+        # first tagged run of this job (typedout v0.1.2, 2026-09-13) failed on
+        # exactly that: the attestations were on PyPI, the job looked in the
+        # wrong place. Files published before OIDC have no provenance record;
+        # from this release on, that is a failure.
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           python - <<'EOF'
-          import json, os, re, sys, urllib.request
+          import json, os, sys, time, urllib.error, urllib.request
           try:
               import tomllib
           except ModuleNotFoundError:
@@ -316,17 +324,36 @@ jobs:
               if fname.endswith((".whl", ".tar.gz")):
                   built[fname] = digest
           info = json.load(urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json"))
-          served = {u["filename"]: (u["digests"]["sha256"], u.get("provenance")) for u in info["urls"]}
+          served = {u["filename"]: u["digests"]["sha256"] for u in info["urls"]}
+
+          def attestations(fname):
+              """Attestations PyPI's Integrity API holds for the file. Retried: the index is eventually consistent."""
+              req = urllib.request.Request(
+                  f"https://pypi.org/integrity/{name}/{version}/{fname}/provenance",
+                  headers={"Accept": "application/vnd.pypi.integrity.v1+json"})
+              for attempt in range(6):
+                  try:
+                      with urllib.request.urlopen(req) as resp:
+                          bundles = json.load(resp).get("attestation_bundles", [])
+                          return sum(len(b.get("attestations", [])) for b in bundles)
+                  except urllib.error.HTTPError as exc:
+                      if exc.code != 404:
+                          raise
+                  time.sleep(20)
+              return 0
+
           bad = []
           for fname, digest in built.items():
               if fname not in served:
                   bad.append(f"{fname}: built, but not on PyPI for {version}")
-              elif served[fname][0] != digest:
-                  bad.append(f"{fname}: PyPI sha256 {served[fname][0][:12]} != built {digest[:12]}")
-              elif not served[fname][1]:
-                  bad.append(f"{fname}: no provenance record on PyPI (PEP 740)")
+              elif served[fname] != digest:
+                  bad.append(f"{fname}: PyPI sha256 {served[fname][:12]} != built {digest[:12]}")
               else:
-                  print(f"ok  {fname}  sha256 matches, provenance present")
+                  n = attestations(fname)
+                  if n == 0:
+                      bad.append(f"{fname}: no provenance record on PyPI (PEP 740, Integrity API)")
+                  else:
+                      print(f"ok  {fname}  sha256 matches, {n} attestation(s) on the Integrity API")
           if bad:
               print("\n".join("FAIL  " + b for b in bad)); sys.exit(1)
           print(f"{len(built)} files: PyPI serves the bytes we built, with provenance")
