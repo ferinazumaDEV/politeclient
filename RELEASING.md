@@ -42,13 +42,19 @@ sha256sum -c SHA256SUMS
 
 # 2. The wheel and sdist were built by this repository's workflow, on GitHub,
 #    from the tagged commit -- not on someone's laptop.
-gh attestation verify  --repo ferinazumaDEV/politeclient
-gh attestation verify  --repo ferinazumaDEV/politeclient
+gh attestation verify ./*.whl --repo ferinazumaDEV/politeclient
+gh attestation verify ./*.tar.gz --repo ferinazumaDEV/politeclient
 
 # 3. PyPI serves those same bytes, and says where they came from.
 curl -s https://pypi.org/pypi/politeclient/X.Y.Z/json \
-  | jq -r '.urls[] | "\(.filename)  \(.digests.sha256)  provenance=\(.provenance != null)"'
-#    The digests must equal the lines in SHA256SUMS; provenance must be true.
+  | jq -r '.urls[] | "\(.filename)  \(.digests.sha256)"'
+#    The digests must equal the lines in SHA256SUMS.
+#    Provenance lives in PyPI's Integrity API, not in that JSON: its
+#    `provenance` key is null for every file on PyPI, attested or not.
+curl -s -H 'Accept: application/vnd.pypi.integrity.v1+json' \
+  https://pypi.org/integrity/politeclient/X.Y.Z/FILENAME/provenance \
+  | jq '[.attestation_bundles[].attestations | length] | add'
+#    Once with FILENAME = the wheel, once = the sdist; both must print >= 1.
 
 # 4. What the package depends on, as installed.
 jq '.components[] | "\(.name) \(.version)"' sbom.cyclonedx.json
