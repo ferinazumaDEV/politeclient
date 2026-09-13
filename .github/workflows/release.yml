@@ -44,6 +44,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Retired promises stay retired
+        # "any LLM", "provider-agnostic" and "bulletproof" were removed from
+        # these packages' descriptions on 2026-09-04/09 because nothing here
+        # ever measured them. A release whose README or metadata says them
+        # again does not ship. Quoted lines (starting with >) are exempt: the
+        # rename note in typedout quotes the old description on purpose.
+        run: |
+          hits=$( { grep -vhE '^\s*>' README.md pyproject.toml 2>/dev/null | grep -niE 'any LLM|provider-agnostic|bulletproof'; \
+                    grep -vhE '^\s*>' README.es.md 2>/dev/null | grep -niE 'cualquier LLM|agn[oó]stic[oa] de proveedor|a prueba de balas|blindad[oa]'; } || true)
+          if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            echo "::error::a retired promise is back in the README or pyproject"; exit 1
+          fi
+          echo "no retired promise in README.md, README.es.md or pyproject.toml"
+
       - name: The tag, pyproject and changelog agree
         id: v
         run: |
