@@ -205,20 +205,19 @@ jobs:
         run: mkdir -p out && cp dist/*.whl dist/*.tar.gz out/
 
       - name: Publish to PyPI
-        # Trusted Publishing (OIDC) when it is configured, the API token until
-        # then. Registering a trusted publisher is a web form on PyPI that
-        # cannot be done from CI - there is no management API, only Index,
-        # JSON, Upload, Integrity, Stats and RSS - so this bridges the gap
-        # instead of blocking on it.
+        # Trusted Publishing. The trusted publisher for this project is
+        # registered on PyPI against this repository, this workflow file and the
+        # `pypi` environment declared above, so the action exchanges the OIDC
+        # token that `id-token: write` grants for a short-lived upload token.
         #
-        # The day the publisher is registered for this project, delete the
-        # `password:` line. Nothing else changes: with no password the action
-        # uses the OIDC token that `id-token: write` already grants above.
+        # There is no `password:` here on purpose. It used to carry
+        # PYPI_API_TOKEN as a bridge while the publisher was unregistered --
+        # registering one is a web form, PyPI has no management API -- and
+        # passing it now would override OIDC and put a long-lived secret back on
+        # the path this workflow exists to remove.
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: out/
-          password: ${{ secrets.PYPI_API_TOKEN }}
-
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
