@@ -6,6 +6,8 @@ Notable changes, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-09-14
+
 ### Deprecated
 
 - **Python below 3.11 is compatibility, not support.** The floor becomes **3.11 in 0.2.0** (3.10 reaches
