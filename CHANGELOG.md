@@ -12,6 +12,33 @@ Notable changes, newest first. The format follows
   end of life in October 2026). Nothing changes within 0.1.x; CI keeps running on every version the
   package still declares.
 
+### Fixed
+
+- **`RetryPolicy.backoff_for` no longer raises `OverflowError` past attempt ~1024.** `2 ** attempt`
+  is an exact int in Python and stops fitting a float there, so a client configured with a large
+  `max_retries` crashed on the attempt it should simply have slept `max_backoff` for. It now does.
+- **`parse_retry_after` follows the `delay-seconds` grammar of RFC 9110 (ASCII digits only).**
+  `int()` also accepted `+5`, `-5` and digits from other scripts (`٣`, `１２`); those now return
+  `None`, so the computed backoff applies instead. A value with more digits than a float can hold
+  raised `OverflowError`; it now means "never", which `compute_delay` clamps to `max_backoff`.
+- **`TokenBucket.acquire` rejects zero, negative and NaN token counts with `ValueError`.** A negative
+  amount *refilled* the bucket past its capacity (`acquire(-10)` on a bucket of 2 left 12 tokens: a
+  limiter you could bypass), zero was a silent no-op, and NaN never returned because it compares
+  false with everything.
+- **`TokenBucket.acquire` no longer spins when the refill lands a few ULPs short of the request.**
+  With a deterministic clock (what the `clock`/`sleep` parameters exist for) the sub-ULP sleep was
+  absorbed and the loop never advanced; with the real clock it busy-waited until the monotonic clock
+  ticked. A deficit within floating-point noise now counts as satisfied.
+- **`RateLimit`, `TokenBucket` and `RetryPolicy` reject non-finite configuration at construction.**
+  `rate=inf` overflowed in `capacity`, `rate=nan` slipped past `rate <= 0` and blew up in `math.ceil`,
+  `burst=inf` built a bucket that never limits, and `max_backoff=nan` would have slept NaN. Rate-limit
+  cases raise `RateLimitConfigError`; retry-policy cases raise `ValueError`.
+
+All five were found by `tests/test_adversarial.py`, a new suite that states the invariants a caller
+relies on (a bounded, finite backoff; a bucket whose tokens only go down when acquired; the RFC
+grammar) and feeds the code the inputs a real client meets at the edges. Every test in it failed
+against the previous code before the fix was written.
+
 ## [0.1.1] — 2026-09-13
 
 ### Added
