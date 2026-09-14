@@ -11,6 +11,7 @@ starves requests to a fast one.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -41,12 +42,14 @@ class RateLimit:
     burst: Optional[int] = None
 
     def __post_init__(self) -> None:
-        if self.rate <= 0:
-            raise RateLimitConfigError("rate must be > 0")
-        if self.per <= 0:
-            raise RateLimitConfigError("per must be > 0")
-        if self.burst is not None and self.burst < 1:
-            raise RateLimitConfigError("burst must be >= 1")
+        # ``x <= 0`` is False for NaN and for +inf, so "not > 0" alone would let both through;
+        # a NaN rate never limits anything and an infinite one overflows ``capacity``.
+        if not (math.isfinite(self.rate) and self.rate > 0):
+            raise RateLimitConfigError("rate must be a finite number > 0")
+        if not (math.isfinite(self.per) and self.per > 0):
+            raise RateLimitConfigError("per must be a finite number > 0")
+        if self.burst is not None and not (math.isfinite(self.burst) and self.burst >= 1):
+            raise RateLimitConfigError("burst must be a finite number >= 1")
 
     @property
     def tokens_per_second(self) -> float:
@@ -57,8 +60,6 @@ class RateLimit:
         if self.burst is not None:
             return self.burst
         # One window's worth of requests, at least 1.
-        import math
-
         return max(1, math.ceil(self.rate))
 
 
@@ -79,10 +80,10 @@ class TokenBucket:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        if rate_per_second <= 0:
-            raise RateLimitConfigError("rate_per_second must be > 0")
-        if capacity < 1:
-            raise RateLimitConfigError("capacity must be >= 1")
+        if not (math.isfinite(rate_per_second) and rate_per_second > 0):
+            raise RateLimitConfigError("rate_per_second must be a finite number > 0")
+        if not (math.isfinite(capacity) and capacity >= 1):
+            raise RateLimitConfigError("capacity must be a finite number >= 1")
         self._rate = rate_per_second
         self._capacity = float(capacity)
         self._tokens = float(capacity)
@@ -106,7 +107,17 @@ class TokenBucket:
         """Block until ``tokens`` are available, then consume them.
 
         Returns the number of seconds spent waiting (0.0 if a token was free).
+
+        Raises:
+            ValueError: if ``tokens`` is not a positive number. Zero would be a no-op, a negative
+                amount would *refill* the bucket past its capacity (a limiter you can bypass by
+                asking for -10), and NaN compares false with everything so the wait loop would
+                never end.
+            RateLimitConfigError: if ``tokens`` exceeds the bucket's capacity, which could never
+                be satisfied.
         """
+        if not tokens > 0:
+            raise ValueError(f"tokens must be a positive number, got {tokens!r}")
         if tokens > self._capacity:
             raise RateLimitConfigError(
                 f"cannot acquire {tokens} tokens from a bucket of capacity {self._capacity}"
@@ -115,8 +126,13 @@ class TokenBucket:
         while True:
             with self._lock:
                 self._refill_locked()
-                if self._tokens >= tokens:
-                    self._tokens -= tokens
+                # Tokens accrue through float arithmetic, so after sleeping exactly
+                # ``deficit / rate`` the refill can land a few ULPs short of ``tokens``, and a
+                # sub-ULP sleep can be absorbed by the clock entirely. A deficit within
+                # floating-point noise is "enough": otherwise the loop spins, forever with a
+                # deterministic clock and until the monotonic clock ticks with a real one.
+                if self._tokens >= tokens or math.isclose(self._tokens, tokens, rel_tol=1e-9):
+                    self._tokens = max(0.0, self._tokens - tokens)
                     return waited
                 deficit = tokens - self._tokens
                 wait = deficit / self._rate

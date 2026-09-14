@@ -14,6 +14,7 @@ Two things people forget when they write their own retry loop:
 from __future__ import annotations
 
 import email.utils
+import math
 import random
 import time
 from dataclasses import dataclass, field
@@ -53,6 +54,15 @@ class RetryPolicy:
     retry_statuses: FrozenSet[int] = field(default_factory=lambda: DEFAULT_RETRY_STATUSES)
     retry_methods: FrozenSet[str] = field(default_factory=lambda: DEFAULT_RETRY_METHODS)
 
+    def __post_init__(self) -> None:
+        # A policy that would sleep NaN or forever is a configuration error, not a runtime surprise.
+        if self.max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+        if not (math.isfinite(self.backoff_factor) and self.backoff_factor >= 0):
+            raise ValueError("backoff_factor must be a finite number >= 0")
+        if not (math.isfinite(self.max_backoff) and self.max_backoff >= 0):
+            raise ValueError("max_backoff must be a finite number >= 0")
+
     def should_retry(self, method: str, status: int, attempt: int) -> bool:
         """Whether a response with ``status`` should be retried."""
         if attempt >= self.max_retries:
@@ -63,7 +73,13 @@ class RetryPolicy:
 
     def backoff_for(self, attempt: int, *, rng: Optional[random.Random] = None) -> float:
         """Compute the backoff sleep (seconds) for a 0-indexed ``attempt``."""
-        raw = self.backoff_factor * (2 ** attempt)
+        # ``2 ** attempt`` is an exact int in Python; past attempt ~1024 it no longer fits a float
+        # and the multiplication raises OverflowError. Any such value is above ``max_backoff``
+        # anyway, so treat it as "the cap" instead of crashing a client that has retried a lot.
+        try:
+            raw = self.backoff_factor * (2.0 ** attempt)
+        except OverflowError:
+            raw = math.inf
         capped = min(raw, self.max_backoff)
         if not self.jitter:
             return capped
@@ -100,11 +116,19 @@ def parse_retry_after(value: str, *, now: Optional[float] = None) -> Optional[fl
     value = value.strip()
     if not value:
         return None
-    # Form 1: delay in seconds.
-    try:
-        return max(0.0, float(int(value)))
-    except ValueError:
-        pass
+    # Form 1: delay-seconds, which RFC 9110 §10.2.3 defines as ``1*DIGIT``: ASCII digits, no
+    # sign, no decimals. ``int()`` is looser than that (it accepts ``+5``, ``-5`` and digits from
+    # any script), so check the grammar first and only then convert.
+    if value.isascii() and value.isdigit():
+        try:
+            return float(int(value))
+        except OverflowError:
+            # More digits than a float can hold: the server is asking for "never". Callers clamp
+            # this to their own ``max_backoff``.
+            return math.inf
+        except ValueError:
+            # Longer than the interpreter's int-conversion limit (4300 digits): same meaning.
+            return math.inf
     # Form 2: an HTTP date. Depending on the Python version this either returns
     # None or raises on an unparseable value — handle both.
     try:
