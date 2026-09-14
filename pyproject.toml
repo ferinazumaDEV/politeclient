@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "politeclient"
-version = "0.1.1"
+version = "0.1.2"
 description = "A careful, well-behaved HTTP client: retries with backoff+jitter, Retry-After, a per-host rate-limit governor, disk cache, pagination and structured logging."
 readme = "README.md"
 # Version policy: this floor is a minimum, not a recommendation, and everything below 3.11 is
